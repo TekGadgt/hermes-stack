@@ -11,14 +11,42 @@ same project filesystem while keeping their web interfaces on separate ports.
 
 ## Project mounts
 
-Start with one or more named host projects:
+Register one or more named host projects while starting the stack:
 
-```fish
-./hermes-stack start app=/absolute/path/to/app
+```console
+./hermes-stack start app=/absolute/path/to/app docs=/absolute/path/to/docs
 ```
 
-The wrapper stores the selection under `~/.config/hermes-docker` and generates a
-Compose override there. Hermes receives each project read-write at
+The CLI stores these locations under `~/.config/hermes-docker` and generates a
+Compose override there. Later starts can use the saved names without repeating
+host paths:
+
+```console
+./hermes-stack start app docs
+```
+
+An explicit `name=/path` adds or updates a registration. If that host path was
+previously registered under a different name, the new name replaces the old
+one, preserving a single stable container identity per host directory. With no
+project arguments, `start`, `restart`, and `update` reuse the last selection.
+
+Inspect or edit the registry with:
+
+```console
+./hermes-stack locations
+./hermes-stack locations add app /absolute/path/to/app
+./hermes-stack locations remove app
+./hermes-stack projects
+```
+
+`locations` shows every registration and marks the active selection;
+`projects` shows only the selection used by the next start or restart. Registry
+and selection files are human-readable JSON written atomically. Existing
+`current-projects` state from the Fish wrapper is imported automatically.
+The CLI uses only the Python 3.9+ standard library, so it does not require a
+package manager or a separate virtual environment on the host.
+
+Hermes receives each selected project read-write at
 `/workspace/<name>`; OD-launched Hermes runs use that same writable path. Open
 Design's own state remains writable at
 `~/.config/hermes-docker/open-design`, so its web workspace, previews, and
@@ -31,7 +59,7 @@ filesystem access and no cross-session write lease.
 
 Open an interactive shell as the unprivileged `hermes` user with:
 
-```fish
+```console
 ./hermes-stack shell
 ```
 
@@ -64,7 +92,7 @@ commit [`85d2e4893c`](https://github.com/nexu-io/open-design/commit/85d2e4893c).
 The stack starts locally without Tailscale authorization. Authorize its
 persistent container identity once, then display the tailnet URLs:
 
-```fish
+```console
 ./hermes-stack tailscale-login
 ./hermes-stack tailscale-urls
 ```
