@@ -1,0 +1,16 @@
+FROM nousresearch/hermes-agent:latest
+
+USER root
+
+ARG PNPM_VERSION=11.21.0
+ARG PLAYWRIGHT_VERSION=1.62.1
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN npm install --global \
+    "pnpm@${PNPM_VERSION}" \
+    "playwright@${PLAYWRIGHT_VERSION}" \
+    && test "$(pnpm --version)" = "${PNPM_VERSION}" \
+    && test "$(playwright --version)" = "Version ${PLAYWRIGHT_VERSION}" \
+    && playwright install --with-deps chromium \
+    && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"

@@ -1,0 +1,173 @@
+name: hermes-stack
+
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: Dockerfile.hermes
+      args:
+        PNPM_VERSION: "11.21.0"
+        PLAYWRIGHT_VERSION: "1.62.1"
+    image: local/hermes-agent-dev:latest
+    container_name: hermes
+    restart: unless-stopped
+    command: gateway run
+    depends_on:
+      open-design-mcp:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:9119:9119"
+    volumes:
+      - ~/.hermes:/opt/data
+      - ./scripts/set-open-design-tools.py:/usr/local/bin/hermes-stack-mcp-editor:ro
+    environment:
+      HERMES_HOME: "/opt/data"
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_FILES_ROOT: "/workspace"
+      HERMES_WRITE_SAFE_ROOT: "/workspace:/opt/data"
+      TERMINAL_CWD: "/workspace"
+    working_dir: "/workspace"
+    ipc: host
+    mem_limit: 4g
+    cpus: 2
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9119/api/health', timeout=3)"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  open-design:
+    image: ${OPEN_DESIGN_IMAGE:-ghcr.io/nexu-io/od:latest}
+    container_name: open-design
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=192"
+      OD_BIND_HOST: "0.0.0.0"
+      OD_PORT: "7456"
+      OD_WEB_PORT: "7456"
+      OD_API_TOKEN: "${OD_API_TOKEN:?OD_API_TOKEN must be set}"
+      OD_ALLOWED_ORIGINS: "${OPEN_DESIGN_ALLOWED_ORIGINS:-}"
+    command: ["node", "apps/daemon/dist/cli.js", "--host", "0.0.0.0", "--port", "7456", "--no-open"]
+    ports:
+      - "127.0.0.1:7456:7456"
+    volumes:
+      - open_design_data:/app/.od
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    pids_limit: 256
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:7456/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  open-design-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.open-design-mcp
+      args:
+        OPEN_DESIGN_IMAGE: ${OPEN_DESIGN_IMAGE:-ghcr.io/nexu-io/od:latest}
+        SUPERGATEWAY_VERSION: "3.4.3"
+    image: local/open-design-mcp:latest
+    container_name: open-design-mcp
+    restart: unless-stopped
+    network_mode: service:open-design
+    depends_on:
+      open-design:
+        condition: service_healthy
+    command:
+      - supergateway
+      - --stdio
+      - node apps/daemon/dist/cli.js mcp --daemon-url http://127.0.0.1:7456
+      - --outputTransport
+      - streamableHttp
+      - --stateful
+      - --sessionTimeout
+      - "600000"
+      - --port
+      - "8000"
+      - --streamableHttpPath
+      - /mcp
+      - --healthEndpoint
+      - /healthz
+      - --logLevel
+      - info
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  tailscale:
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
+    container_name: hermes-stack-tailscale
+    hostname: ${TAILSCALE_HOSTNAME:-hermes-stack}
+    restart: unless-stopped
+    entrypoint: ["/config/entrypoint.sh"]
+    environment:
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_KUBE_SECRET: ""
+      TS_USERSPACE: "true"
+      TS_AUTH_ONCE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tailscale_state:/var/lib/tailscale
+      - ./tailscale:/config:ro
+
+  tailscale-proxy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    container_name: hermes-stack-tailscale-proxy
+    restart: unless-stopped
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_started
+      hermes:
+        condition: service_healthy
+      open-design:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    read_only: true
+    tmpfs:
+      - /config
+      - /data
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  open_design_data:
+  tailscale_state:

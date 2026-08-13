@@ -1,0 +1,381 @@
+#!/usr/bin/env fish
+
+set -g script_path (realpath (status filename))
+set -g stack_dir (path dirname "$script_path")
+set -g command_name (path basename "$script_path")
+set -g compose_file "$stack_dir/compose.yaml"
+set -g env_file "$stack_dir/.env"
+set -g state_dir "$HOME/.config/hermes-docker"
+set -g projects_file "$state_dir/current-projects"
+set -g override_file "$state_dir/compose.projects.json"
+set -g stack_services hermes open-design open-design-mcp tailscale tailscale-proxy
+
+mkdir -p "$state_dir"
+
+function usage
+    echo "Usage:"
+    echo "  $command_name start [name=path ...]"
+    echo "  $command_name stop"
+    echo "  $command_name restart"
+    echo "  $command_name status"
+    echo "  $command_name logs hermes|open-design|mcp|tailscale|all"
+    echo "  $command_name projects"
+    echo "  $command_name shell"
+    echo "  $command_name update"
+    echo "  $command_name mcp-setup [--replace]"
+    echo "  $command_name tailscale-login"
+    echo "  $command_name tailscale-status"
+    echo "  $command_name tailscale-urls"
+end
+
+function compose
+    set -l args --project-directory "$stack_dir" -f "$compose_file" -f "$override_file"
+    if test -f "$env_file"
+        set -a args --env-file "$env_file"
+    end
+    docker compose $args $argv
+end
+
+function load_projects
+    set -g project_names
+    set -g project_paths
+
+    if not test -f "$projects_file"
+        return 0
+    end
+
+    while read -l entry
+        if test -z "$entry"
+            continue
+        end
+
+        set -l parts (string split -m 1 '=' "$entry")
+        if test (count $parts) -ne 2
+            echo "Invalid saved project entry: $entry" >&2
+            return 1
+        end
+
+        set -l name $parts[1]
+        set -l project_path $parts[2]
+        if not string match -rq '^[A-Za-z0-9][A-Za-z0-9._-]*$' -- "$name"
+            echo "Invalid saved project name: $name" >&2
+            return 1
+        end
+        if not test -d "$project_path"
+            echo "Saved project directory no longer exists: $project_path" >&2
+            return 1
+        end
+
+        set -a project_names "$name"
+        set -a project_paths "$project_path"
+    end < "$projects_file"
+end
+
+function save_projects
+    set -l entries $argv
+    set -l names
+    set -l output
+
+    for entry in $entries
+        if not string match -q '*=*' -- "$entry"
+            echo "Invalid project argument: $entry" >&2
+            echo "Expected format: name=path" >&2
+            return 1
+        end
+
+        set -l parts (string split -m 1 '=' "$entry")
+        set -l name $parts[1]
+        set -l project_path $parts[2]
+        if not string match -rq '^[A-Za-z0-9][A-Za-z0-9._-]*$' -- "$name"
+            echo "Invalid project name: $name" >&2
+            return 1
+        end
+        if contains -- "$name" $names
+            echo "Duplicate project name: $name" >&2
+            return 1
+        end
+        if string match -q '~*' -- "$project_path"
+            set project_path (string replace -r '^~(?=/|$)' "$HOME" "$project_path")
+        end
+        if not test -d "$project_path"
+            echo "Project directory does not exist: $project_path" >&2
+            return 1
+        end
+
+        set project_path (realpath "$project_path")
+        or return 1
+        set -a names "$name"
+        set -a output "$name=$project_path"
+    end
+
+    set -l temporary (mktemp "$state_dir/current-projects.XXXXXX")
+    or return 1
+    printf '%s\n' $output > "$temporary"
+    and mv "$temporary" "$projects_file"
+end
+
+function json_string
+    jq -Rn --arg value "$argv[1]" '$value'
+end
+
+function generate_override
+    load_projects
+    or return $status
+
+    set -l temporary (mktemp "$state_dir/compose.projects.XXXXXX")
+    or return 1
+
+    printf '{"services":{"hermes":{"volumes":[' > "$temporary"
+    if test (count $project_names) -gt 0
+        for index in (seq (count $project_names))
+            if test $index -gt 1
+                printf ',' >> "$temporary"
+            end
+            json_string "$project_paths[$index]:/workspace/$project_names[$index]" >> "$temporary"
+        end
+    end
+    printf ']},"open-design":{"volumes":[' >> "$temporary"
+    if test (count $project_names) -gt 0
+        for index in (seq (count $project_names))
+            if test $index -gt 1
+                printf ',' >> "$temporary"
+            end
+            json_string "$project_paths[$index]:/workspace/$project_names[$index]:ro" >> "$temporary"
+        end
+    end
+    printf ']}}}\n' >> "$temporary"
+    and mv "$temporary" "$override_file"
+end
+
+function tailscale_fqdn
+    compose exec -T tailscale tailscale status --json 2>/dev/null \
+        | jq -r '.Self.DNSName // empty' 2>/dev/null \
+        | string replace -r '\.$' ''
+end
+
+function configure_remote_origin
+    set -l fqdn (tailscale_fqdn)
+    if test -n "$fqdn"
+        set -gx OPEN_DESIGN_ALLOWED_ORIGINS "https://$fqdn:7456"
+        return 0
+    end
+    set -e OPEN_DESIGN_ALLOWED_ORIGINS
+    return 1
+end
+
+function wait_for_remote_origin
+    for attempt in (seq 30)
+        if configure_remote_origin
+            return 0
+        end
+        sleep 1
+    end
+    return 1
+end
+
+function show_urls
+    echo "Hermes:      http://127.0.0.1:9119"
+    echo "Open Design: http://127.0.0.1:7456"
+
+    set -l fqdn (tailscale_fqdn)
+    if test -z "$fqdn"
+        echo "Remote URLs unavailable: Tailscale is not authenticated."
+        echo "Run '$command_name tailscale-login' to authorize this stack."
+        return 1
+    end
+
+    echo "Hermes:      https://$fqdn:9119"
+    echo "Open Design: https://$fqdn:7456"
+    echo "Hermes OAuth callback: https://$fqdn:9119/auth/callback"
+end
+
+function start_stack
+    generate_override
+    or return $status
+
+    compose up -d tailscale
+    or return $status
+
+    configure_remote_origin >/dev/null
+    set -l tailscale_ready $status
+
+    compose up -d --wait --wait-timeout 180 $stack_services
+    or return $status
+
+    echo "Hermes stack is ready."
+    show_urls
+    if test $tailscale_ready -ne 0
+        return 0
+    end
+    return 0
+end
+
+function setup_mcp
+    set -l replace 0
+    if test (count $argv) -gt 1
+        echo "Usage: $command_name mcp-setup [--replace]" >&2
+        return 1
+    end
+    if test (count $argv) -eq 1
+        if test "$argv[1]" != --replace
+            echo "Unknown option: $argv[1]" >&2
+            return 1
+        end
+        set replace 1
+    end
+
+    set -l endpoint http://open-design:8000/mcp
+    set -l current (compose exec -T --user hermes hermes \
+        hermes config get mcp_servers.open-design.url --json 2>/dev/null)
+    set -l get_status $status
+
+    if test $get_status -eq 0
+        set current (string trim -c '"' -- "$current")
+        if test "$current" != "$endpoint" -a $replace -eq 0
+            echo "Open Design MCP already points to: $current" >&2
+            echo "Run '$command_name mcp-setup --replace' to replace only that server entry." >&2
+            return 1
+        end
+    end
+
+    compose exec -T --user hermes hermes \
+        hermes config set --force mcp_servers.open-design.url "$endpoint"
+    or return $status
+    compose exec -T --user hermes \
+        -e EDITOR=/usr/local/bin/hermes-stack-mcp-editor \
+        hermes hermes config edit
+    or return $status
+    set -l exclusions (compose exec -T --user hermes hermes \
+        hermes config get mcp_servers.open-design.tools.exclude --json 2>/dev/null)
+    if test "$exclusions" != '["start_run", "cancel_run", "delete_file", "delete_project"]'
+        echo "Hermes did not persist the Open Design tool exclusions as a list." >&2
+        return 1
+    end
+    compose exec -T --user hermes hermes hermes mcp test open-design
+    or return $status
+
+    compose restart hermes
+    or return $status
+    compose up -d --wait --wait-timeout 180 hermes
+    or return $status
+    echo "Open Design MCP is configured with destructive and agent-run tools excluded."
+end
+
+set -l command $argv[1]
+
+switch "$command"
+    case start
+        set -l projects $argv[2..]
+        if test (count $projects) -gt 0
+            save_projects $projects
+            or exit $status
+        end
+        start_stack
+        or exit $status
+
+    case stop
+        generate_override
+        or exit $status
+        compose stop $stack_services
+        or exit $status
+        echo "Hermes stack stopped."
+
+    case restart
+        generate_override
+        or exit $status
+        compose stop $stack_services
+        or exit $status
+        start_stack
+        or exit $status
+
+    case status
+        generate_override
+        or exit $status
+        compose ps --all
+
+    case logs
+        generate_override
+        or exit $status
+        set -l target $argv[2]
+        switch "$target"
+            case hermes
+                compose logs -f hermes
+            case open-design
+                compose logs -f open-design
+            case mcp
+                compose logs -f open-design-mcp
+            case tailscale
+                compose logs -f tailscale tailscale-proxy
+            case all
+                compose logs -f $stack_services
+            case '*'
+                echo "Usage: $command_name logs hermes|open-design|mcp|tailscale|all" >&2
+                exit 1
+        end
+
+    case projects
+        if test -s "$projects_file"
+            while read -l entry
+                if test -n "$entry"
+                    echo "$entry"
+                end
+            end < "$projects_file"
+        else
+            echo "No project set configured."
+        end
+
+    case shell
+        generate_override
+        or exit $status
+        compose exec --user hermes hermes /bin/bash
+
+    case update
+        generate_override
+        or exit $status
+        compose pull open-design tailscale tailscale-proxy
+        or exit $status
+        compose build --pull --no-cache hermes open-design-mcp
+        or exit $status
+        start_stack
+        or exit $status
+        echo "Hermes stack updated."
+
+    case mcp-setup
+        generate_override
+        or exit $status
+        setup_mcp $argv[2..]
+        or exit $status
+
+    case tailscale-login
+        generate_override
+        or exit $status
+        compose up -d tailscale
+        or exit $status
+        compose exec tailscale tailscale up
+        or exit $status
+        wait_for_remote_origin
+        or begin
+            echo "Tailscale authorized, but its tailnet DNS name is not available yet." >&2
+            exit 1
+        end
+        compose up -d --force-recreate open-design open-design-mcp
+        or exit $status
+        compose up -d --wait --wait-timeout 180 $stack_services
+        or exit $status
+        show_urls
+
+    case tailscale-status
+        generate_override
+        or exit $status
+        compose exec tailscale tailscale status
+
+    case tailscale-urls
+        generate_override
+        or exit $status
+        show_urls
+        or exit $status
+
+    case '*'
+        usage
+        exit 1
+end

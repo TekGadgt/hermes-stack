@@ -1,0 +1,9 @@
+ARG OPEN_DESIGN_IMAGE=ghcr.io/nexu-io/od:latest
+FROM ${OPEN_DESIGN_IMAGE}
+
+USER root
+
+ARG SUPERGATEWAY_VERSION=3.4.3
+
+RUN npm install --global "supergateway@${SUPERGATEWAY_VERSION}" \
+    && npm cache clean --force
