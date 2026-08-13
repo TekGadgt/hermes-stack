@@ -34,7 +34,8 @@ RUN git init \
     && pnpm --filter @open-design/web build \
     && pnpm --filter @open-design/daemon deploy --legacy --prod /opt/open-design/apps/daemon
 
-FROM nousresearch/hermes-agent:latest@sha256:1e32ed53357b867e2efdc9570040bd58b574d129bb783aadb513608255b99cb7
+# Hermes Agent v0.20.0 (2026.8.3), upstream revision 996ae10e.
+FROM nousresearch/hermes-agent:latest@sha256:5f3496ddc7d8f8bae88f5cd2860a8ef2a52ee69d29a4aaeb8e5829434c4c5145
 
 USER root
 
