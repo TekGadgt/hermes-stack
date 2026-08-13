@@ -1,4 +1,5 @@
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,6 +7,9 @@ from pathlib import Path
 from hermes_stack_cli import (
     CliError,
     StateStore,
+    WORKSPACE_MANIFEST_CONTAINER_PATH,
+    WORKSPACE_RUNTIME_CONTAINER_DIRECTORY,
+    WORKSPACE_SYSTEM_PROMPT,
     remove_location,
     resolve_state_directory,
     update_location,
@@ -58,17 +62,99 @@ class StateStoreTests(unittest.TestCase):
             self.store.resolve_selection(["missing"])
         self.assertEqual(self.store.load_selection(), ["alpha"])
 
-    def test_override_uses_stable_container_paths(self):
+    def test_override_uses_dual_paths_and_runtime_contract(self):
         self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
         self.store.generate_override()
         document = json.loads(self.store.override_file.read_text())
+        alpha = str(self.alpha.resolve())
+        beta = str(self.beta.resolve())
         self.assertEqual(
             document["services"]["hermes"]["volumes"],
             [
-                f"{self.alpha.resolve()}:/workspace/alpha",
-                f"{self.beta.resolve()}:/workspace/beta",
+                {"type": "bind", "source": alpha, "target": "/workspace/alpha"},
+                {"type": "bind", "source": alpha, "target": alpha},
+                {"type": "bind", "source": beta, "target": "/workspace/beta"},
+                {"type": "bind", "source": beta, "target": beta},
+                {
+                    "type": "bind",
+                    "source": str(self.store.runtime_directory.resolve()),
+                    "target": WORKSPACE_RUNTIME_CONTAINER_DIRECTORY,
+                    "read_only": True,
+                },
             ],
         )
+        self.assertEqual(
+            document["services"]["hermes"]["environment"],
+            {
+                "HERMES_EPHEMERAL_SYSTEM_PROMPT": WORKSPACE_SYSTEM_PROMPT,
+                "HERMES_STACK_WORKSPACE_MANIFEST": WORKSPACE_MANIFEST_CONTAINER_PATH,
+                "HERMES_WRITE_SAFE_ROOT": f"/workspace:/opt/data:{alpha}:{beta}",
+            },
+        )
+        self.assertEqual(
+            json.loads(self.store.workspace_manifest_file.read_text()),
+            {
+                "version": 1,
+                "workspaces": [
+                    {
+                        "name": "alpha",
+                        "workspace_path": "/workspace/alpha",
+                        "host_path": alpha,
+                    },
+                    {
+                        "name": "beta",
+                        "workspace_path": "/workspace/beta",
+                        "host_path": beta,
+                    },
+                ],
+            },
+        )
+        self.assertEqual(
+            stat.S_IMODE(self.store.workspace_manifest_file.stat().st_mode),
+            0o644,
+        )
+        self.assertEqual(
+            self.store.runtime_manifest_file.read_text(),
+            self.store.workspace_manifest_file.read_text(),
+        )
+        self.assertEqual(
+            stat.S_IMODE(self.store.runtime_manifest_file.stat().st_mode),
+            0o644,
+        )
+
+    def test_unselected_locations_are_absent_from_runtime_files(self):
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        self.store.resolve_selection(["alpha"])
+        self.store.generate_override()
+        override = self.store.override_file.read_text()
+        manifest = self.store.workspace_manifest_file.read_text()
+        self.assertNotIn(str(self.beta.resolve()), override)
+        self.assertNotIn(str(self.beta.resolve()), manifest)
+
+    def test_empty_selection_generates_manifest_only_mount(self):
+        self.store.generate_override()
+        document = json.loads(self.store.override_file.read_text())
+        service = document["services"]["hermes"]
+        self.assertEqual(len(service["volumes"]), 1)
+        self.assertEqual(
+            service["environment"]["HERMES_WRITE_SAFE_ROOT"],
+            "/workspace:/opt/data",
+        )
+        self.assertEqual(
+            json.loads(self.store.workspace_manifest_file.read_text())["workspaces"],
+            [],
+        )
+
+    def test_paths_with_spaces_are_preserved_in_long_volume_syntax(self):
+        spaced = self.root / "project with spaces"
+        spaced.mkdir()
+        self.store.resolve_selection([f"spaced={spaced}"])
+        self.store.generate_override()
+        volumes = json.loads(self.store.override_file.read_text())["services"]["hermes"][
+            "volumes"
+        ]
+        self.assertEqual(volumes[0]["source"], str(spaced.resolve()))
+        self.assertEqual(volumes[1]["target"], str(spaced.resolve()))
 
     def test_legacy_selection_is_migrated(self):
         legacy_store = StateStore(self.root / "legacy")

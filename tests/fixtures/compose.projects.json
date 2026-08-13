@@ -1,7 +1,29 @@
 {
   "services": {
     "hermes": {
-      "volumes": []
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${PWD}",
+          "target": "/workspace/hermes-stack"
+        },
+        {
+          "type": "bind",
+          "source": "${PWD}",
+          "target": "${PWD}"
+        },
+        {
+          "type": "bind",
+          "source": "${PWD}/tests/fixtures/runtime",
+          "target": "/run/hermes-stack",
+          "read_only": true
+        }
+      ],
+      "environment": {
+        "HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use portable workspace mappings.",
+        "HERMES_STACK_WORKSPACE_MANIFEST": "/run/hermes-stack/workspaces.json",
+        "HERMES_WRITE_SAFE_ROOT": "/workspace:/opt/data:${PWD}"
+      }
     }
   }
 }

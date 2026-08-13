@@ -1,0 +1,4 @@
+interface:
+  display_name: "Workspace Paths"
+  short_description: "Keep workspace automation portable"
+  default_prompt: "Use $workspace-paths to create automation with portable workspace paths."

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "workspaces": [
+    {
+      "name": "hermes-stack",
+      "workspace_path": "/workspace/hermes-stack",
+      "host_path": "${PWD}"
+    }
+  ]
+}

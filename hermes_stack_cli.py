@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Mapping, Optional, Sequence
 
@@ -19,6 +20,32 @@ NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STACK_SERVICES = ("hermes", "tailscale", "tailscale-proxy")
 STATE_DIRECTORY_NAME = "hermes-stack"
 LEGACY_STATE_DIRECTORY_NAME = "hermes-docker"
+WORKSPACE_MANIFEST_CONTAINER_PATH = "/run/hermes-stack/workspaces.json"
+WORKSPACE_RUNTIME_CONTAINER_DIRECTORY = "/run/hermes-stack"
+WORKSPACE_SYSTEM_PROMPT = """Hermes Stack workspace contract:
+- Read selected workspace mappings from /run/hermes-stack/workspaces.json.
+- Each workspace_path and host_path pair names the same bind-mounted files, not two copies.
+- Use /workspace/<name> for interactive work and dashboard file operations.
+- Treat selected workspaces as independent unless the user's task explicitly connects them.
+- Never dispatch duplicate work through both paths of one mapping.
+- Prefer project-relative paths in code and automation. When an absolute path must persist
+  outside this container, use the mapping's host_path; it also exists inside the container.
+- Use the workspace-paths skill when creating scripts, scheduled jobs, configuration, or
+  cross-workspace automation that records filesystem paths."""
+
+
+@dataclass(frozen=True)
+class WorkspaceMapping:
+    name: str
+    workspace_path: str
+    host_path: str
+
+    def as_document(self) -> Mapping[str, str]:
+        return {
+            "name": self.name,
+            "workspace_path": self.workspace_path,
+            "host_path": self.host_path,
+        }
 
 
 class CliError(Exception):
@@ -32,6 +59,9 @@ class StateStore:
         self.selection_file = state_dir / "current-projects.json"
         self.legacy_selection_file = state_dir / "current-projects"
         self.override_file = state_dir / "compose.projects.json"
+        self.workspace_manifest_file = state_dir / "workspaces.json"
+        self.runtime_directory = state_dir / "runtime"
+        self.runtime_manifest_file = self.runtime_directory / "workspaces.json"
 
     def ensure_directories(self) -> None:
         self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -149,8 +179,8 @@ class StateStore:
                 validate_name(name)
                 project_path = str(canonical_directory(raw_path))
 
-                # A host directory has one stable container identity. Assigning
-                # it a new name transfers the registration to that name.
+                # A host directory has one stable workspace alias. Assigning it
+                # a new name transfers the registration to that name.
                 displaced = [
                     saved_name
                     for saved_name, saved_path in locations.items()
@@ -176,10 +206,11 @@ class StateStore:
         self.save_selection(selection)
         return selection
 
-    def generate_override(self) -> None:
+    def selected_workspaces(self) -> List[WorkspaceMapping]:
         locations = self.load_locations()
         selection = self.load_selection()
-        volumes: List[str] = []
+        workspaces: List[WorkspaceMapping] = []
+        targets = set()
         for name in selection:
             raw_path = locations.get(name)
             if raw_path is None:
@@ -187,11 +218,77 @@ class StateStore:
                     f"Selected location '{name}' is no longer registered. "
                     "Run start with a valid selection."
                 )
-            project_path = canonical_directory(raw_path)
-            volumes.append(f"{project_path}:/workspace/{name}")
+            host_path = str(canonical_directory(raw_path))
+            workspace_path = f"/workspace/{name}"
+            for target in (workspace_path, host_path):
+                if target in targets:
+                    raise CliError(f"Workspace mount target is not unique: {target}")
+                targets.add(target)
+            workspaces.append(
+                WorkspaceMapping(
+                    name=name,
+                    workspace_path=workspace_path,
+                    host_path=host_path,
+                )
+            )
+        return workspaces
+
+    def generate_override(self) -> None:
+        workspaces = self.selected_workspaces()
+        manifest = {
+            "version": 1,
+            "workspaces": [workspace.as_document() for workspace in workspaces],
+        }
+        self._atomic_json(
+            self.workspace_manifest_file,
+            manifest,
+        )
+        self.runtime_directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+        self.runtime_directory.chmod(0o755)
+        self._atomic_json(self.runtime_manifest_file, manifest)
+        # The parent state directory remains private (0700). These filtered
+        # copies must be readable by unprivileged container processes; only the
+        # dedicated runtime directory is bind-mounted into the container.
+        self.workspace_manifest_file.chmod(0o644)
+        self.runtime_manifest_file.chmod(0o644)
+
+        volumes = []
+        for workspace in workspaces:
+            for target in (workspace.workspace_path, workspace.host_path):
+                volumes.append(
+                    {
+                        "type": "bind",
+                        "source": workspace.host_path,
+                        "target": target,
+                    }
+                )
+        volumes.append(
+            {
+                "type": "bind",
+                "source": str(self.runtime_directory.resolve(strict=True)),
+                "target": WORKSPACE_RUNTIME_CONTAINER_DIRECTORY,
+                "read_only": True,
+            }
+        )
+
+        safe_roots = ["/workspace", "/opt/data"]
+        safe_roots.extend(workspace.host_path for workspace in workspaces)
         self._atomic_json(
             self.override_file,
-            {"services": {"hermes": {"volumes": volumes}}},
+            {
+                "services": {
+                    "hermes": {
+                        "volumes": volumes,
+                        "environment": {
+                            "HERMES_EPHEMERAL_SYSTEM_PROMPT": WORKSPACE_SYSTEM_PROMPT,
+                            "HERMES_STACK_WORKSPACE_MANIFEST": (
+                                WORKSPACE_MANIFEST_CONTAINER_PATH
+                            ),
+                            "HERMES_WRITE_SAFE_ROOT": ":".join(safe_roots),
+                        },
+                    }
+                }
+            },
         )
 
 
@@ -453,9 +550,9 @@ def list_locations(store: StateStore) -> None:
         return
     selection = set(store.load_selection())
     print_table(
-        ("ACTIVE", "NAME", "HOST PATH", "CONTAINER PATH"),
+        ("ACTIVE", "NAME", "WORKSPACE PATH", "PORTABLE PATH"),
         (
-            ("●" if name in selection else "", name, path, f"/workspace/{name}")
+            ("●" if name in selection else "", name, f"/workspace/{name}", path)
             for name, path in locations.items()
         ),
     )
@@ -468,8 +565,8 @@ def list_projects(store: StateStore) -> None:
         print("No project set configured.")
         return
     print_table(
-        ("NAME", "HOST PATH", "CONTAINER PATH"),
-        ((name, locations.get(name, "<missing>"), f"/workspace/{name}") for name in selection),
+        ("NAME", "WORKSPACE PATH", "PORTABLE PATH"),
+        ((name, f"/workspace/{name}", locations.get(name, "<missing>")) for name in selection),
     )
 
 

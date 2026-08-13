@@ -14,5 +14,7 @@ __pycache__/
 /current-projects
 /current-projects.json
 /compose.projects.json
+/workspaces.json
+/runtime/
 /tailscale-state/
 /open-design-data/
