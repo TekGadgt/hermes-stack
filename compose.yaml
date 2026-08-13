@@ -28,7 +28,6 @@ services:
       OD_BIND_HOST: "0.0.0.0"
       OD_PORT: "7456"
       OD_WEB_PORT: "7456"
-      OD_API_TOKEN: "${OD_API_TOKEN:?OD_API_TOKEN must be set}"
       OD_DISABLE_API_AUTH: "1"
       OD_DATA_DIR: "/opt/open-design-data"
       OD_ALLOWED_ORIGINS: "${OPEN_DESIGN_ALLOWED_ORIGINS:-}"
