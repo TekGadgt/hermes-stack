@@ -1,6 +1,6 @@
 ARG OPEN_DESIGN_REV=0c237048cb078f95ab01c416924dcb255f7d5dfd
 
-FROM node:24-bookworm-slim AS open-design-build
+FROM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS open-design-build
 
 ARG OPEN_DESIGN_REV
 
@@ -34,7 +34,7 @@ RUN git init \
     && pnpm --filter @open-design/web build \
     && pnpm --filter @open-design/daemon deploy --legacy --prod /opt/open-design/apps/daemon
 
-FROM nousresearch/hermes-agent:latest
+FROM nousresearch/hermes-agent:latest@sha256:1e32ed53357b867e2efdc9570040bd58b574d129bb783aadb513608255b99cb7
 
 USER root
 

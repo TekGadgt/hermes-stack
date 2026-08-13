@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.9"
+
+      - name: Test Python CLI
+        run: python -m unittest discover -s tests -v
+
+      - name: Compile Python sources
+        env:
+          PYTHONPYCACHEPREFIX: /tmp/hermes-stack-pycache
+        run: python -m py_compile hermes-stack hermes_stack_cli.py tests/test_hermes_stack_cli.py
+
+      - name: Validate static configuration
+        run: |
+          python -m json.tool tailscale/serve.json >/dev/null
+          sh -n tailscale/entrypoint.sh docker/open-design-run docker/open-design-setup
+          docker compose \
+            -f compose.yaml \
+            -f tests/fixtures/compose.projects.json \
+            config --quiet
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan with Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"

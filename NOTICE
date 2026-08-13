@@ -1,0 +1,14 @@
+Hermes Stack
+Copyright 2026 Ryan McGovern
+
+This project builds and applies a small source patch to Open Design, which is
+licensed under the Apache License, Version 2.0.
+
+Open Design
+Copyright 2026 Open Design contributors
+https://github.com/nexu-io/open-design
+
+The Open Design source is fetched during the container build and is not
+vendored in this repository. The local-agent cloud-gate backport under
+patches/ is a modification of Open Design source and remains subject to the
+Apache License, Version 2.0.

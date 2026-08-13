@@ -135,6 +135,46 @@ The wrapper does not inspect or change Hermes' OAuth or other dashboard
 settings. After login it recreates Open Design with its exact remote HTTPS
 origin allowed and refreshes the Tailscale proxy's application upstream.
 
+## Security model
+
+The stack assumes a single-user host and a trusted tailnet:
+
+- Hermes and Open Design publish host ports only on `127.0.0.1`. They are not
+  directly reachable from the LAN or public internet.
+- Tailscale Serve is the remote access boundary. Funnel is explicitly disabled;
+  tailnet membership and Tailscale grants determine who can connect.
+- Open Design's bearer-token middleware is deliberately disabled because its
+  browser and API traffic passes through the trusted Tailscale/Caddy boundary.
+  Any process running as the local user can still reach OD through its loopback
+  port, so this is not isolation from other local processes or users.
+- Hermes authentication under `~/.hermes`, OD state, Tailscale node state, and
+  the project-location registry are sensitive runtime data stored outside this
+  repository. Do not copy them into the repository or publish a snapshot made
+  from a running container with `docker commit`.
+- Selected host projects are mounted read-write. Hermes sessions started from
+  Discord and OD are independent writers, so do not run both against the same
+  project concurrently.
+
+Use narrow Tailscale grants for ports `443` and `9119`, periodically review
+tailnet membership, and treat anyone with access to either UI as able to invoke
+the authenticated Hermes runtime.
+
+## Reproducible dependencies
+
+External container and build images use readable release tags plus immutable
+multi-platform SHA-256 digests. The Open Design source revision and CLI tool
+versions are pinned separately in `compose.yaml` and `Dockerfile.hermes`.
+
+`hermes-stack update` rebuilds and restarts the reviewed versions in this
+repository; it does not silently advance pinned dependencies. On GitHub,
+Dependabot checks Dockerfiles, Compose, and workflow actions weekly and proposes
+updates as pull requests. Review and merge an update, then run
+`hermes-stack update` locally.
+
+CI runs the Python CLI tests, syntax and configuration checks, and a full Git
+history scan for committed secrets. Workflow actions are themselves pinned to
+immutable commits.
+
 ## Future custom-domain migration
 
 Custom domains are not enabled by this stack. A future migration can use two
@@ -163,3 +203,9 @@ making either service public:
 DNS availability does not depend on the laptop being online because the DNS
 provider remains authoritative. The laptop must come online often enough for
 the persisted ACME client to renew its certificates before expiry.
+
+## License
+
+Hermes Stack is licensed under the Apache License, Version 2.0. See `LICENSE`
+for the terms and `NOTICE` for the Open Design attribution associated with the
+temporary source backport.

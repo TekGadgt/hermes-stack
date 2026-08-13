@@ -49,7 +49,7 @@ services:
       start_period: 20s
 
   tailscale:
-    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:latest}
+    image: tailscale/tailscale:v1.102.2@sha256:321ce041508c19079b57a28b6666c8d81ab0b08accc0a2585b3ab663d557ac24
     container_name: hermes-stack-tailscale
     hostname: ${TAILSCALE_HOSTNAME:-hermes-stack}
     restart: unless-stopped
@@ -65,7 +65,7 @@ services:
       - ./tailscale:/config:ro
 
   tailscale-proxy:
-    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
     container_name: hermes-stack-tailscale-proxy
     restart: unless-stopped
     network_mode: service:tailscale
