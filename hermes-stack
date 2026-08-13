@@ -168,6 +168,12 @@ function wait_for_remote_origin
         if configure_remote_origin
             return 0
         end
+
+        set -l backend_state (compose exec -T tailscale tailscale status --json 2>/dev/null \
+            | jq -r '.BackendState // empty' 2>/dev/null)
+        if contains -- "$backend_state" NeedsLogin Stopped
+            return 1
+        end
         sleep 1
     end
     return 1
@@ -196,7 +202,7 @@ function start_stack
     compose up -d tailscale
     or return $status
 
-    configure_remote_origin >/dev/null
+    wait_for_remote_origin >/dev/null
     set -l tailscale_ready $status
 
     compose up -d --wait --wait-timeout 180 $stack_services

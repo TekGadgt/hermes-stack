@@ -1,7 +1,7 @@
-http://127.0.0.1:9119 {
+:9119 {
 	reverse_proxy http://hermes:9119
 }
 
-http://127.0.0.1:7456 {
+:7456 {
 	reverse_proxy http://open-design:7456
 }
