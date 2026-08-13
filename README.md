@@ -113,6 +113,15 @@ Design's own state remains writable at
 settings continue to work. The wrapper marks OD onboarding complete and selects
 Hermes as its agent after startup.
 
+The launcher refuses workspace paths that would defeat or destabilize this
+boundary: the filesystem root, the home directory or its parents, known
+credential and configuration trees (including `.ssh`, `.config`, `.docker`,
+and `.hermes`), Docker runtime directories, system pseudo-filesystems, and
+paths overlapping reserved container locations. It also rejects path-list
+separator and control characters before constructing the write-safe-root
+environment. Ordinary project directories and separately located output
+directories such as Obsidian vaults remain valid.
+
 Avoid running a Discord-driven Hermes edit and an OD-driven Hermes run against
 the same project at the same time. They are independent sessions with shared
 filesystem access and no cross-session write lease.

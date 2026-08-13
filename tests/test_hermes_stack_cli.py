@@ -13,6 +13,7 @@ from hermes_stack_cli import (
     remove_location,
     resolve_state_directory,
     update_location,
+    validate_workspace_directory,
 )
 
 
@@ -212,6 +213,65 @@ class StateDirectoryTests(unittest.TestCase):
             legacy.mkdir(parents=True)
             current.mkdir()
             self.assertEqual(resolve_state_directory(home), current)
+
+
+class WorkspacePolicyTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        self.home = self.root / "home"
+        self.home.mkdir()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def assert_rejected(self, path, message):
+        path.mkdir(parents=True, exist_ok=True)
+        with self.assertRaisesRegex(CliError, message):
+            validate_workspace_directory(path.resolve(), home=self.home)
+
+    def test_project_and_external_vault_paths_are_allowed(self):
+        project = self.home / "projects" / "app"
+        vault = self.root / "external" / "obsidian-vault"
+        project.mkdir(parents=True)
+        vault.mkdir(parents=True)
+        validate_workspace_directory(project.resolve(), home=self.home)
+        validate_workspace_directory(vault.resolve(), home=self.home)
+
+    def test_filesystem_root_and_home_are_rejected(self):
+        with self.assertRaisesRegex(CliError, "filesystem root"):
+            validate_workspace_directory(Path("/"), home=self.home)
+        with self.assertRaisesRegex(CliError, "home directory"):
+            validate_workspace_directory(self.home, home=self.home)
+        with self.assertRaisesRegex(CliError, "home directory"):
+            validate_workspace_directory(self.root, home=self.home)
+
+    def test_credential_and_config_trees_are_rejected(self):
+        for relative in (".ssh", ".config/hermes-stack", ".docker", ".hermes"):
+            with self.subTest(relative=relative):
+                self.assert_rejected(self.home / relative, "sensitive path")
+
+    def test_docker_runtime_and_reserved_container_paths_are_rejected(self):
+        for path in (Path("/var/run"), Path("/private/var/run")):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(CliError, "sensitive path"):
+                    validate_workspace_directory(path, home=self.home)
+        for path in (
+            Path("/workspace/project"),
+            Path("/opt/data/project"),
+            Path("/opt/hermes/project"),
+            Path("/opt/open-design/project"),
+            Path("/command/project"),
+        ):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(CliError, "reserved container path"):
+                    validate_workspace_directory(path, home=self.home)
+
+    def test_path_separator_is_rejected_before_safe_root_serialization(self):
+        unsafe = self.root / "project:opt"
+        unsafe.mkdir()
+        with self.assertRaisesRegex(CliError, "HERMES_WRITE_SAFE_ROOT"):
+            validate_workspace_directory(unsafe.resolve(), home=self.home)
 
 
 if __name__ == "__main__":

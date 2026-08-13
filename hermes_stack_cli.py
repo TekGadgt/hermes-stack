@@ -22,6 +22,43 @@ STATE_DIRECTORY_NAME = "hermes-stack"
 LEGACY_STATE_DIRECTORY_NAME = "hermes-docker"
 WORKSPACE_MANIFEST_CONTAINER_PATH = "/run/hermes-stack/workspaces.json"
 WORKSPACE_RUNTIME_CONTAINER_DIRECTORY = "/run/hermes-stack"
+RESERVED_CONTAINER_PATHS = (
+    Path("/command"),
+    Path("/ms-playwright"),
+    Path("/package"),
+    Path("/workspace"),
+    Path("/opt/data"),
+    Path("/opt/hermes"),
+    Path("/opt/open-design"),
+    Path("/opt/open-design-data"),
+    Path("/opt/open-design-node"),
+    Path("/run/hermes-stack"),
+)
+SYSTEM_SENSITIVE_PATHS = (
+    Path("/boot"),
+    Path("/dev"),
+    Path("/etc"),
+    Path("/proc"),
+    Path("/root"),
+    Path("/run"),
+    Path("/sys"),
+    Path("/usr"),
+    Path("/var/lib/docker"),
+    Path("/var/run"),
+    Path("/private/var/lib/docker"),
+    Path("/private/var/run"),
+)
+HOME_SENSITIVE_RELATIVE_PATHS = (
+    ".aws",
+    ".azure",
+    ".colima",
+    ".config",
+    ".docker",
+    ".gnupg",
+    ".hermes",
+    ".kube",
+    ".ssh",
+)
 WORKSPACE_SYSTEM_PROMPT = """Hermes Stack workspace contract:
 - Read selected workspace mappings from /run/hermes-stack/workspaces.json.
 - Each workspace_path and host_path pair names the same bind-mounted files, not two copies.
@@ -117,7 +154,7 @@ class StateStore:
                 raise CliError(f"Invalid legacy project entry: {line}")
             name, raw_path = line.split("=", 1)
             validate_name(name)
-            project_path = canonical_directory(raw_path)
+            project_path = workspace_directory(raw_path)
             locations[name] = str(project_path)
             selection.append(name)
 
@@ -177,7 +214,7 @@ class StateStore:
             if "=" in entry:
                 name, raw_path = entry.split("=", 1)
                 validate_name(name)
-                project_path = str(canonical_directory(raw_path))
+                project_path = str(workspace_directory(raw_path))
 
                 # A host directory has one stable workspace alias. Assigning it
                 # a new name transfers the registration to that name.
@@ -218,7 +255,7 @@ class StateStore:
                     f"Selected location '{name}' is no longer registered. "
                     "Run start with a valid selection."
                 )
-            host_path = str(canonical_directory(raw_path))
+            host_path = str(workspace_directory(raw_path))
             workspace_path = f"/workspace/{name}"
             for target in (workspace_path, host_path):
                 if target in targets:
@@ -309,6 +346,59 @@ def canonical_directory(raw_path: str) -> Path:
     if not resolved.is_dir():
         raise CliError(f"Project path is not a directory: {resolved}")
     return resolved
+
+
+def path_contains(parent: Path, child: Path) -> bool:
+    try:
+        child.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def paths_overlap(first: Path, second: Path) -> bool:
+    return path_contains(first, second) or path_contains(second, first)
+
+
+def validate_workspace_directory(path: Path, home: Optional[Path] = None) -> None:
+    resolved_home = (home or Path.home()).expanduser().resolve()
+
+    if path.parent == path:
+        raise CliError("Refusing to expose the filesystem root as a workspace.")
+    if any(ord(character) < 32 for character in str(path)):
+        raise CliError(f"Workspace path contains control characters: {path}")
+    if os.pathsep in str(path):
+        raise CliError(
+            f"Workspace path contains '{os.pathsep}', which cannot be represented "
+            "safely in HERMES_WRITE_SAFE_ROOT."
+        )
+    if path == resolved_home or path_contains(path, resolved_home):
+        raise CliError(
+            f"Refusing to expose the home directory or one of its parents: {path}"
+        )
+
+    sensitive_paths = [
+        resolved_home / relative for relative in HOME_SENSITIVE_RELATIVE_PATHS
+    ]
+    sensitive_paths.extend(SYSTEM_SENSITIVE_PATHS)
+    for sensitive in sensitive_paths:
+        if paths_overlap(path, sensitive):
+            raise CliError(
+                f"Refusing workspace path {path}: it overlaps sensitive path {sensitive}."
+            )
+
+    for reserved in RESERVED_CONTAINER_PATHS:
+        if paths_overlap(path, reserved):
+            raise CliError(
+                f"Refusing workspace path {path}: its exact-path mount would overlap "
+                f"reserved container path {reserved}."
+            )
+
+
+def workspace_directory(raw_path: str, home: Optional[Path] = None) -> Path:
+    path = canonical_directory(raw_path)
+    validate_workspace_directory(path, home=home)
+    return path
 
 
 def resolve_state_directory(home: Path, allow_legacy: bool = False) -> Path:
@@ -572,7 +662,7 @@ def list_projects(store: StateStore) -> None:
 
 def update_location(store: StateStore, name: str, raw_path: str) -> None:
     validate_name(name)
-    project_path = str(canonical_directory(raw_path))
+    project_path = str(workspace_directory(raw_path))
     locations = store.load_locations()
     selection = store.load_selection()
     displaced = [
