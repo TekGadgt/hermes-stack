@@ -53,7 +53,10 @@ RUN npm install --global \
     && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends poppler-utils \
+    && apt-get install -y --no-install-recommends \
+        fish \
+        poppler-utils \
+    && /usr/sbin/usermod --shell /usr/bin/fish hermes \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=open-design-build /usr/local/bin/node /opt/open-design-node/bin/node

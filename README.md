@@ -29,6 +29,15 @@ Avoid running a Discord-driven Hermes edit and an OD-driven Hermes run against
 the same project at the same time. They are independent sessions with shared
 filesystem access and no cross-session write lease.
 
+Open an interactive shell as the unprivileged `hermes` user with:
+
+```fish
+./hermes-stack shell
+```
+
+Fish is that user's login shell. Supervised services and automated tool calls
+continue to use their explicitly configured interpreters.
+
 ## Native Open Design agent
 
 Open Design invokes the local agent using its supported Hermes adapter:
