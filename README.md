@@ -60,6 +60,19 @@ host port remains loopback-only, and the exact remote origin is allow-listed
 after Tailscale login. This lets the remote UI save OD settings without exposing
 OD directly on the LAN.
 
+## Open Design Cloud identity
+
+The upstream self-hosted image exposes Vela sign-in in the UI but does not ship
+the `vela` executable it launches. This stack builds a small derived OD image
+with `@powerformer/vela-cli` pinned to `0.0.21`, the version validated upstream
+on Node 24 Alpine. Vela's login state is writable
+and host-persisted at `~/.config/hermes-docker/open-design-amr`.
+
+Signing into Vela satisfies OD's cloud-identity gate. It does not copy Hermes'
+OAuth state into OD. Hermes' MCP configuration still excludes OD agent-run and
+destructive tools; using Vela to run models directly from OD's own UI is a
+separate action.
+
 The Hermes dashboard OAuth callback configured in Hermes must exactly match:
 
 ```text

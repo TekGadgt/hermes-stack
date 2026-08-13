@@ -7,12 +7,17 @@ set -g compose_file "$stack_dir/compose.yaml"
 set -g env_file "$stack_dir/.env"
 set -g state_dir "$HOME/.config/hermes-docker"
 set -g open_design_state_dir "$state_dir/open-design"
+set -g open_design_amr_state_dir "$state_dir/open-design-amr"
 set -g tailscale_state_dir "$state_dir/tailscale-state"
 set -g projects_file "$state_dir/current-projects"
 set -g override_file "$state_dir/compose.projects.json"
 set -g stack_services hermes open-design open-design-mcp tailscale tailscale-proxy
 
-mkdir -p "$state_dir" "$open_design_state_dir" "$tailscale_state_dir"
+mkdir -p \
+    "$state_dir" \
+    "$open_design_state_dir" \
+    "$open_design_amr_state_dir" \
+    "$tailscale_state_dir"
 
 function usage
     echo "Usage:"
@@ -349,9 +354,9 @@ switch "$command"
     case update
         generate_override
         or exit $status
-        compose pull open-design tailscale tailscale-proxy
+        compose pull tailscale tailscale-proxy
         or exit $status
-        compose build --pull --no-cache hermes open-design-mcp
+        compose build --pull --no-cache hermes open-design open-design-mcp
         or exit $status
         start_stack
         or exit $status

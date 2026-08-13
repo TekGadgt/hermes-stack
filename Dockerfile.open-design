@@ -1,0 +1,13 @@
+ARG OPEN_DESIGN_IMAGE=ghcr.io/nexu-io/od:latest
+FROM ${OPEN_DESIGN_IMAGE}
+
+USER root
+
+ARG VELA_CLI_VERSION=0.0.21
+
+RUN npm install --global "@powerformer/vela-cli@${VELA_CLI_VERSION}" \
+    && npm cache clean --force \
+    && test -x /usr/local/bin/vela \
+    && vela --version
+
+USER open-design
