@@ -38,6 +38,13 @@ tools. The MCP bridge is reachable only on the Compose network at
 `http://open-design:8000/mcp`; it has no host port and reaches OD through the
 daemon's loopback interface.
 
+The bridge adds one read-only `get_design_context` tool. Before creating or
+substantially revising an OD artifact, Hermes can use it to pull the active (or
+explicitly selected) project's custom instructions, full selected skill,
+design-system specification, canonical applied-plugin prompt block, and current
+artifact manifests in one response. This exposes OD's reusable design guidance
+without invoking OD's agent-run pipeline or Vela.
+
 ## Tailscale
 
 The stack starts locally without Tailscale authorization. Authorize its
