@@ -54,12 +54,14 @@ services:
       OD_PORT: "7456"
       OD_WEB_PORT: "7456"
       OD_API_TOKEN: "${OD_API_TOKEN:?OD_API_TOKEN must be set}"
+      OD_DISABLE_API_AUTH: "1"
+      OD_DATA_DIR: "/app/.od"
       OD_ALLOWED_ORIGINS: "${OPEN_DESIGN_ALLOWED_ORIGINS:-}"
     command: ["node", "apps/daemon/dist/cli.js", "--host", "0.0.0.0", "--port", "7456", "--no-open"]
     ports:
       - "127.0.0.1:7456:7456"
     volumes:
-      - open_design_data:/app/.od
+      - ${HOME}/.config/hermes-docker/open-design:/app/.od
     read_only: true
     tmpfs:
       - /tmp
@@ -144,7 +146,7 @@ services:
       TS_AUTH_ONCE: "true"
       TS_SERVE_CONFIG: /config/serve.json
     volumes:
-      - tailscale_state:/var/lib/tailscale
+      - ${HOME}/.config/hermes-docker/tailscale-state:/var/lib/tailscale
       - ./tailscale:/config:ro
 
   tailscale-proxy:
@@ -167,7 +169,3 @@ services:
       - /data
     security_opt:
       - no-new-privileges:true
-
-volumes:
-  open_design_data:
-  tailscale_state:

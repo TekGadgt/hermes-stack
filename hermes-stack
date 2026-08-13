@@ -6,11 +6,13 @@ set -g command_name (path basename "$script_path")
 set -g compose_file "$stack_dir/compose.yaml"
 set -g env_file "$stack_dir/.env"
 set -g state_dir "$HOME/.config/hermes-docker"
+set -g open_design_state_dir "$state_dir/open-design"
+set -g tailscale_state_dir "$state_dir/tailscale-state"
 set -g projects_file "$state_dir/current-projects"
 set -g override_file "$state_dir/compose.projects.json"
 set -g stack_services hermes open-design open-design-mcp tailscale tailscale-proxy
 
-mkdir -p "$state_dir"
+mkdir -p "$state_dir" "$open_design_state_dir" "$tailscale_state_dir"
 
 function usage
     echo "Usage:"
@@ -195,6 +197,12 @@ function show_urls
     echo "Hermes OAuth callback: https://$fqdn:9119/auth/callback"
 end
 
+function configure_open_design
+    compose exec -T open-design node apps/daemon/dist/cli.js config set \
+        onboardingCompleted true \
+        --daemon-url http://127.0.0.1:7456 >/dev/null
+end
+
 function start_stack
     generate_override
     or return $status
@@ -206,6 +214,9 @@ function start_stack
     set -l tailscale_ready $status
 
     compose up -d --wait --wait-timeout 180 $stack_services
+    or return $status
+
+    configure_open_design
     or return $status
 
     echo "Hermes stack is ready."
@@ -367,6 +378,8 @@ switch "$command"
         compose up -d --force-recreate open-design open-design-mcp
         or exit $status
         compose up -d --wait --wait-timeout 180 $stack_services
+        or exit $status
+        configure_open_design
         or exit $status
         show_urls
 

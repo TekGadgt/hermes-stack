@@ -15,8 +15,11 @@ Start with one or more named host projects:
 The wrapper stores the selection under `~/.config/hermes-docker` and generates a
 Compose override there. Hermes receives each project read-write at
 `/workspace/<name>`; Open Design receives the same mount read-only. Open
-Design's own `open_design_data` volume remains writable so its web workspace and
-previews continue to work.
+Design's own state remains writable at
+`~/.config/hermes-docker/open-design`, so its web workspace, previews, and
+settings continue to work. The wrapper marks OD onboarding complete after
+startup; OD remains a local workspace and MCP server rather than a separate
+model caller.
 
 Avoid editing the same Open Design-managed artifact in the UI while Hermes is
 writing it through MCP. Open Design's write API is last-write-wins.
@@ -46,8 +49,16 @@ persistent container identity once, then display the tailnet URLs:
 ```
 
 Tailscale Serve exposes HTTPS on ports `9119` and `7456` only to the tailnet;
-Funnel is disabled. Local access remains available at
+Funnel is disabled. Its node identity is stored at
+`~/.config/hermes-docker/tailscale-state`, outside Docker's managed volume
+storage. Local access remains available at
 `http://127.0.0.1:9119` and `http://127.0.0.1:7456`.
+
+Open Design disables its API-token middleware because Tailscale and Caddy are
+the trusted authentication boundary for remote browser access. Its published
+host port remains loopback-only, and the exact remote origin is allow-listed
+after Tailscale login. This lets the remote UI save OD settings without exposing
+OD directly on the LAN.
 
 The Hermes dashboard OAuth callback configured in Hermes must exactly match:
 
