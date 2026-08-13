@@ -7,16 +7,14 @@ set -g compose_file "$stack_dir/compose.yaml"
 set -g env_file "$stack_dir/.env"
 set -g state_dir "$HOME/.config/hermes-docker"
 set -g open_design_state_dir "$state_dir/open-design"
-set -g open_design_amr_state_dir "$state_dir/open-design-amr"
 set -g tailscale_state_dir "$state_dir/tailscale-state"
 set -g projects_file "$state_dir/current-projects"
 set -g override_file "$state_dir/compose.projects.json"
-set -g stack_services hermes open-design open-design-mcp tailscale tailscale-proxy
+set -g stack_services hermes tailscale tailscale-proxy
 
 mkdir -p \
     "$state_dir" \
     "$open_design_state_dir" \
-    "$open_design_amr_state_dir" \
     "$tailscale_state_dir"
 
 function usage
@@ -25,11 +23,10 @@ function usage
     echo "  $command_name stop"
     echo "  $command_name restart"
     echo "  $command_name status"
-    echo "  $command_name logs hermes|open-design|mcp|tailscale|all"
+    echo "  $command_name logs hermes|open-design|tailscale|all"
     echo "  $command_name projects"
     echo "  $command_name shell"
     echo "  $command_name update"
-    echo "  $command_name mcp-setup [--replace]"
     echo "  $command_name tailscale-login"
     echo "  $command_name tailscale-status"
     echo "  $command_name tailscale-urls"
@@ -141,15 +138,6 @@ function generate_override
             json_string "$project_paths[$index]:/workspace/$project_names[$index]" >> "$temporary"
         end
     end
-    printf ']},"open-design":{"volumes":[' >> "$temporary"
-    if test (count $project_names) -gt 0
-        for index in (seq (count $project_names))
-            if test $index -gt 1
-                printf ',' >> "$temporary"
-            end
-            json_string "$project_paths[$index]:/workspace/$project_names[$index]:ro" >> "$temporary"
-        end
-    end
     printf ']}}}\n' >> "$temporary"
     and mv "$temporary" "$override_file"
 end
@@ -203,8 +191,15 @@ function show_urls
 end
 
 function configure_open_design
-    compose exec -T open-design node apps/daemon/dist/cli.js config set \
-        onboardingCompleted true \
+    compose exec -T --user hermes hermes \
+        /opt/open-design-node/bin/node /opt/open-design/apps/daemon/dist/cli.js \
+        config set onboardingCompleted true \
+        --daemon-url http://127.0.0.1:7456 >/dev/null
+    or return $status
+
+    compose exec -T --user hermes hermes \
+        /opt/open-design-node/bin/node /opt/open-design/apps/daemon/dist/cli.js \
+        config set agentId hermes \
         --daemon-url http://127.0.0.1:7456 >/dev/null
 end
 
@@ -218,7 +213,15 @@ function start_stack
     wait_for_remote_origin >/dev/null
     set -l tailscale_ready $status
 
-    compose up -d --wait --wait-timeout 180 $stack_services
+    compose up -d --remove-orphans --wait --wait-timeout 180 $stack_services
+    or return $status
+
+    # Caddy does not automatically reload a changed bind-mounted Caddyfile.
+    # Recreate the small proxy after the application is healthy so its live
+    # upstream always matches the current stack topology.
+    compose up -d --force-recreate tailscale-proxy
+    or return $status
+    compose up -d --wait --wait-timeout 180 tailscale-proxy
     or return $status
 
     configure_open_design
@@ -230,57 +233,6 @@ function start_stack
         return 0
     end
     return 0
-end
-
-function setup_mcp
-    set -l replace 0
-    if test (count $argv) -gt 1
-        echo "Usage: $command_name mcp-setup [--replace]" >&2
-        return 1
-    end
-    if test (count $argv) -eq 1
-        if test "$argv[1]" != --replace
-            echo "Unknown option: $argv[1]" >&2
-            return 1
-        end
-        set replace 1
-    end
-
-    set -l endpoint http://open-design:8000/mcp
-    set -l current (compose exec -T --user hermes hermes \
-        hermes config get mcp_servers.open-design.url --json 2>/dev/null)
-    set -l get_status $status
-
-    if test $get_status -eq 0
-        set current (string trim -c '"' -- "$current")
-        if test "$current" != "$endpoint" -a $replace -eq 0
-            echo "Open Design MCP already points to: $current" >&2
-            echo "Run '$command_name mcp-setup --replace' to replace only that server entry." >&2
-            return 1
-        end
-    end
-
-    compose exec -T --user hermes hermes \
-        hermes config set --force mcp_servers.open-design.url "$endpoint"
-    or return $status
-    compose exec -T --user hermes \
-        -e EDITOR=/usr/local/bin/hermes-stack-mcp-editor \
-        hermes hermes config edit
-    or return $status
-    set -l exclusions (compose exec -T --user hermes hermes \
-        hermes config get mcp_servers.open-design.tools.exclude --json 2>/dev/null)
-    if test "$exclusions" != '["start_run", "cancel_run", "delete_file", "delete_project"]'
-        echo "Hermes did not persist the Open Design tool exclusions as a list." >&2
-        return 1
-    end
-    compose exec -T --user hermes hermes hermes mcp test open-design
-    or return $status
-
-    compose restart hermes
-    or return $status
-    compose up -d --wait --wait-timeout 180 hermes
-    or return $status
-    echo "Open Design MCP is configured with destructive and agent-run tools excluded."
 end
 
 set -l command $argv[1]
@@ -323,15 +275,14 @@ switch "$command"
             case hermes
                 compose logs -f hermes
             case open-design
-                compose logs -f open-design
-            case mcp
-                compose logs -f open-design-mcp
+                echo "Open Design is supervised inside the Hermes container; logs are combined."
+                compose logs -f hermes
             case tailscale
                 compose logs -f tailscale tailscale-proxy
             case all
                 compose logs -f $stack_services
             case '*'
-                echo "Usage: $command_name logs hermes|open-design|mcp|tailscale|all" >&2
+                echo "Usage: $command_name logs hermes|open-design|tailscale|all" >&2
                 exit 1
         end
 
@@ -356,17 +307,11 @@ switch "$command"
         or exit $status
         compose pull tailscale tailscale-proxy
         or exit $status
-        compose build --pull --no-cache hermes open-design open-design-mcp
+        compose build --pull hermes
         or exit $status
         start_stack
         or exit $status
         echo "Hermes stack updated."
-
-    case mcp-setup
-        generate_override
-        or exit $status
-        setup_mcp $argv[2..]
-        or exit $status
 
     case tailscale-login
         generate_override
@@ -380,9 +325,13 @@ switch "$command"
             echo "Tailscale authorized, but its tailnet DNS name is not available yet." >&2
             exit 1
         end
-        compose up -d --force-recreate open-design open-design-mcp
+        compose up -d --force-recreate hermes
         or exit $status
         compose up -d --wait --wait-timeout 180 $stack_services
+        or exit $status
+        compose up -d --force-recreate tailscale-proxy
+        or exit $status
+        compose up -d --wait --wait-timeout 180 tailscale-proxy
         or exit $status
         configure_open_design
         or exit $status

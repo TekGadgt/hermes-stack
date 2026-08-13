@@ -3,5 +3,5 @@
 }
 
 :7456 {
-	reverse_proxy http://open-design:7456
+	reverse_proxy http://hermes:7456
 }

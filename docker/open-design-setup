@@ -1,0 +1,28 @@
+#!/command/with-contenv sh
+set -eu
+
+od_data_dir="${OD_DATA_DIR:-/opt/open-design-data}"
+
+case "$od_data_dir" in
+    /opt/open-design-data|/opt/open-design-data/*) ;;
+    *)
+        echo "[open-design] refusing unexpected OD_DATA_DIR: $od_data_dir" >&2
+        exit 1
+        ;;
+esac
+
+mkdir -p "$od_data_dir"
+if find "$od_data_dir" \( ! -user hermes -o ! -group hermes \) -print -quit | grep -q .; then
+    echo "[open-design] migrating persisted state ownership to hermes"
+    chown -R --no-dereference hermes:hermes "$od_data_dir"
+fi
+
+# The former MCP bridge exposed OD's agent-run tools back to Hermes. Remove
+# only that server entry before the gateway starts so native OD -> Hermes ACP
+# runs cannot recurse through OD's start_run tool.
+if /command/s6-setuidgid hermes /opt/hermes/.venv/bin/hermes \
+    config get mcp_servers.open-design >/dev/null 2>&1; then
+    /command/s6-setuidgid hermes /opt/hermes/.venv/bin/hermes \
+        config unset mcp_servers.open-design >/dev/null
+    echo "[open-design] removed obsolete Hermes MCP entry"
+fi
