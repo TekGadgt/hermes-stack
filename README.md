@@ -71,8 +71,8 @@ hermes-stack start app docs
 
 An explicit `name=/path` adds or updates a registration. If that host path was
 previously registered under a different name, the new name replaces the old
-one, preserving a single stable container identity per host directory. With no
-project arguments, `start`, `restart`, and `update` reuse the last selection.
+one. With no project arguments, `start`, `restart`, and `update` reuse the last
+selection.
 
 Inspect or edit the registry with:
 
@@ -84,18 +84,43 @@ hermes-stack projects
 ```
 
 `locations` shows every registration and marks the active selection;
-`projects` shows only the selection used by the next start or restart. Registry
-and selection files are human-readable JSON written atomically. Existing
-`current-projects` state from the Fish wrapper is imported automatically.
-The CLI uses only the Python 3.9+ standard library, so it does not require a
-package manager or a separate virtual environment on the host.
+`projects` shows only the selection used by the next start or restart. Registry,
+selection, and runtime workspace-manifest files are human-readable JSON written
+atomically. Existing `current-projects` state from the Fish wrapper is imported
+automatically. The CLI uses only the Python 3.9+ standard library, so it does
+not require a package manager or a separate virtual environment on the host.
 
-Hermes receives each selected project read-write at
-`/workspace/<name>`; OD-launched Hermes runs use that same writable path. Open
+Each selected directory is mounted read-write at two synchronized paths:
+
+- `/workspace/<name>` is the operational path used by the dashboard and normal
+  interactive file work.
+- Its original absolute host path is also present inside the container. Use
+  that portable identity when generated code or automation must record an
+  absolute path that works both inside and outside the container.
+
+Both paths are bind mounts of the same directory, not copies; an edit or upload
+through either path is immediately visible through the other. Prefer relative
+paths inside a project. Hermes receives an always-on workspace contract and a
+`workspace-paths` skill that select the portable path when an absolute reference
+must persist. The selected mappings are available inside the container at
+`/run/hermes-stack/workspaces.json` and on the host at
+`~/.config/hermes-stack/workspaces.json`.
+
+Only names in the current selection are mounted or included in that runtime
+manifest. Other saved locations remain unavailable to the container. Open
 Design's own state remains writable at
 `~/.config/hermes-stack/open-design`, so its web workspace, previews, and
 settings continue to work. The wrapper marks OD onboarding complete and selects
 Hermes as its agent after startup.
+
+The launcher refuses workspace paths that would defeat or destabilize this
+boundary: the filesystem root, the home directory or its parents, known
+credential and configuration trees (including `.ssh`, `.config`, `.docker`,
+and `.hermes`), Docker runtime directories, system pseudo-filesystems, and
+paths overlapping reserved container locations. It also rejects path-list
+separator and control characters before constructing the write-safe-root
+environment. Ordinary project directories and separately located output
+directories such as Obsidian vaults remain valid.
 
 Avoid running a Discord-driven Hermes edit and an OD-driven Hermes run against
 the same project at the same time. They are independent sessions with shared
@@ -195,9 +220,11 @@ The stack assumes a single-user host and a trusted tailnet:
   the project-location registry are sensitive runtime data stored outside this
   repository. Do not copy them into the repository or publish a snapshot made
   from a running container with `docker commit`.
-- Selected host projects are mounted read-write. Hermes sessions started from
-  Discord and OD are independent writers, so do not run both against the same
-  project concurrently.
+- Selected host projects are mounted read-write at both their `/workspace`
+  alias and original absolute path. These are two names for the same files and
+  do not expose either path's parent or sibling directories. Hermes sessions
+  started from Discord and OD are independent writers, so do not run both
+  against the same project concurrently.
 
 Use narrow Tailscale grants for ports `443` and `9119`, periodically review
 tailnet membership, and treat anyone with access to either UI as able to invoke
