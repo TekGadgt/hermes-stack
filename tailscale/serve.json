@@ -3,7 +3,7 @@
     "9119": {
       "HTTPS": true
     },
-    "7456": {
+    "443": {
       "HTTPS": true
     }
   },
@@ -15,7 +15,7 @@
         }
       }
     },
-    "${TS_CERT_DOMAIN}:7456": {
+    "${TS_CERT_DOMAIN}:443": {
       "Handlers": {
         "/": {
           "Proxy": "http://127.0.0.1:7456"
@@ -25,6 +25,6 @@
   },
   "AllowFunnel": {
     "${TS_CERT_DOMAIN}:9119": false,
-    "${TS_CERT_DOMAIN}:7456": false
+    "${TS_CERT_DOMAIN}:443": false
   }
 }

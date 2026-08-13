@@ -151,7 +151,7 @@ end
 function configure_remote_origin
     set -l fqdn (tailscale_fqdn)
     if test -n "$fqdn"
-        set -gx OPEN_DESIGN_ALLOWED_ORIGINS "https://$fqdn:7456"
+        set -gx OPEN_DESIGN_ALLOWED_ORIGINS "https://$fqdn"
         return 0
     end
     set -e OPEN_DESIGN_ALLOWED_ORIGINS
@@ -186,7 +186,7 @@ function show_urls
     end
 
     echo "Hermes:      https://$fqdn:9119"
-    echo "Open Design: https://$fqdn:7456"
+    echo "Open Design: https://$fqdn"
     echo "Hermes OAuth callback: https://$fqdn:9119/auth/callback"
 end
 

@@ -60,11 +60,19 @@ persistent container identity once, then display the tailnet URLs:
 ./hermes-stack tailscale-urls
 ```
 
-Tailscale Serve exposes HTTPS on ports `9119` and `7456` only to the tailnet;
-Funnel is disabled. Its node identity is stored at
+Tailscale Serve exposes Open Design on standard HTTPS port `443` and Hermes on
+HTTPS port `9119`, only to the tailnet; Funnel is disabled. Its node identity
+is stored at
 `~/.config/hermes-docker/tailscale-state`, outside Docker's managed volume
 storage. Local access remains available at
 `http://127.0.0.1:9119` and `http://127.0.0.1:7456`.
+
+The resulting remote URLs are:
+
+```text
+https://<tailscale-fqdn>
+https://<tailscale-fqdn>:9119
+```
 
 Open Design disables its API-token middleware because Tailscale and Caddy are
 the trusted authentication boundary for remote browser access. Its published
@@ -89,3 +97,32 @@ https://<tailscale-fqdn>:9119/auth/callback
 The wrapper does not inspect or change Hermes' OAuth or other dashboard
 settings. After login it recreates Open Design with its exact remote HTTPS
 origin allowed and refreshes the Tailscale proxy's application upstream.
+
+## Future custom-domain migration
+
+Custom domains are not enabled by this stack. A future migration can use two
+hostnames, such as `design.example.com` and `hermes.example.com`, without
+making either service public:
+
+1. Keep the domain's authoritative DNS at the existing provider. Public `A`
+   records can point both names at this node's persisted Tailscale `100.x`
+   address. Publishing that private address does not provide a public route;
+   clients still need tailnet access and permission under Tailscale grants.
+2. Replace Tailscale Serve's HTTPS termination with tailnet-only raw TCP `443`
+   forwarding to Caddy. Let Caddy route by hostname to OD on `7456` and Hermes
+   on `9119`.
+3. Obtain certificates through ACME DNS-01. Use a Caddy build containing the
+   DNS module for the authoritative provider, or use Certbot/acme.sh with that
+   provider's DNS API. HTTP-01 cannot validate a tailnet-only origin.
+4. Persist Caddy's `/data` outside Docker-managed volumes (for example,
+   `~/.config/hermes-docker/caddy-data`) and provide narrowly scoped DNS API
+   credentials without committing them to this repository.
+5. Allow `https://design.example.com` in `OD_ALLOWED_ORIGINS`, and change the
+   Hermes dashboard OAuth callback to
+   `https://hermes.example.com/auth/callback`.
+6. Verify both names from an authorized tailnet device, confirm Funnel remains
+   disabled, then remove the `*.ts.net` Serve routes.
+
+DNS availability does not depend on the laptop being online because the DNS
+provider remains authoritative. The laptop must come online often enough for
+the persisted ACME client to renew its certificates before expiry.
