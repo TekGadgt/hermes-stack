@@ -9,20 +9,64 @@ Hermes and Open Design run as supervised processes in one application
 container. This gives OD direct access to Hermes' authenticated CLI and the
 same project filesystem while keeping their web interfaces on separate ports.
 
+## Install the launcher
+
+The host needs Docker with the Compose plugin and Python 3.9 or newer. After
+cloning the repository, make the launcher executable and link it into a
+user-owned binary directory:
+
+```console
+chmod +x hermes-stack
+mkdir -p ~/.local/bin
+ln -sfn "$PWD/hermes-stack" ~/.local/bin/hermes-stack
+```
+
+Add that directory to the host shell's persistent `PATH` configuration:
+
+```fish
+# Fish: run once; fish_add_path persists the universal variable.
+fish_add_path "$HOME/.local/bin"
+```
+
+```bash
+# Bash: add this line to ~/.bashrc, or ~/.bash_profile for a login shell.
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+```zsh
+# Zsh: add this line to ~/.zshrc.
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Open a new shell (or source the Bash/Zsh startup file) before invoking
+`hermes-stack`. The symlink continues to work if the repository contents are
+updated in place. Recreate it after moving or renaming the repository directory.
+
+Existing installations using the old state directory should stop the running
+stack and move it before issuing any other command with this version:
+
+```console
+hermes-stack stop
+mv ~/.config/hermes-docker ~/.config/hermes-stack
+```
+
+The `stop` command recognizes the legacy directory specifically to make this
+migration safe. No state is copied or moved automatically.
+
 ## Project mounts
 
 Register one or more named host projects while starting the stack:
 
 ```console
-./hermes-stack start app=/absolute/path/to/app docs=/absolute/path/to/docs
+hermes-stack start app=/absolute/path/to/app docs=/absolute/path/to/docs
 ```
 
-The CLI stores these locations under `~/.config/hermes-docker` and generates a
+The CLI stores these locations under `~/.config/hermes-stack` and generates a
 Compose override there. Later starts can use the saved names without repeating
 host paths:
 
 ```console
-./hermes-stack start app docs
+hermes-stack start app docs
 ```
 
 An explicit `name=/path` adds or updates a registration. If that host path was
@@ -33,10 +77,10 @@ project arguments, `start`, `restart`, and `update` reuse the last selection.
 Inspect or edit the registry with:
 
 ```console
-./hermes-stack locations
-./hermes-stack locations add app /absolute/path/to/app
-./hermes-stack locations remove app
-./hermes-stack projects
+hermes-stack locations
+hermes-stack locations add app /absolute/path/to/app
+hermes-stack locations remove app
+hermes-stack projects
 ```
 
 `locations` shows every registration and marks the active selection;
@@ -49,7 +93,7 @@ package manager or a separate virtual environment on the host.
 Hermes receives each selected project read-write at
 `/workspace/<name>`; OD-launched Hermes runs use that same writable path. Open
 Design's own state remains writable at
-`~/.config/hermes-docker/open-design`, so its web workspace, previews, and
+`~/.config/hermes-stack/open-design`, so its web workspace, previews, and
 settings continue to work. The wrapper marks OD onboarding complete and selects
 Hermes as its agent after startup.
 
@@ -60,7 +104,7 @@ filesystem access and no cross-session write lease.
 Open an interactive shell as the unprivileged `hermes` user with:
 
 ```console
-./hermes-stack shell
+hermes-stack shell
 ```
 
 Fish is that user's login shell. Supervised services and automated tool calls
@@ -93,14 +137,14 @@ The stack starts locally without Tailscale authorization. Authorize its
 persistent container identity once, then display the tailnet URLs:
 
 ```console
-./hermes-stack tailscale-login
-./hermes-stack tailscale-urls
+hermes-stack tailscale-login
+hermes-stack tailscale-urls
 ```
 
 Tailscale Serve exposes Open Design on standard HTTPS port `443` and Hermes on
 HTTPS port `9119`, only to the tailnet; Funnel is disabled. Its node identity
 is stored at
-`~/.config/hermes-docker/tailscale-state`, outside Docker's managed volume
+`~/.config/hermes-stack/tailscale-state`, outside Docker's managed volume
 storage. Local access remains available at
 `http://127.0.0.1:9119` and `http://127.0.0.1:7456`.
 
@@ -122,7 +166,7 @@ OD directly on the LAN.
 Open Design does not install or use Vela. Its native agent inherits
 `HERMES_HOME=/opt/data` and uses the same host-persisted Hermes authentication
 as the Discord gateway. The former
-`~/.config/hermes-docker/open-design-amr` directory is left untouched during
+`~/.config/hermes-stack/open-design-amr` directory is left untouched during
 migration but is no longer mounted or read.
 
 The Hermes dashboard OAuth callback configured in Hermes must exactly match:
@@ -192,7 +236,7 @@ making either service public:
    DNS module for the authoritative provider, or use Certbot/acme.sh with that
    provider's DNS API. HTTP-01 cannot validate a tailnet-only origin.
 4. Persist Caddy's `/data` outside Docker-managed volumes (for example,
-   `~/.config/hermes-docker/caddy-data`) and provide narrowly scoped DNS API
+   `~/.config/hermes-stack/caddy-data`) and provide narrowly scoped DNS API
    credentials without committing them to this repository.
 5. Allow `https://design.example.com` in `OD_ALLOWED_ORIGINS`, and change the
    Hermes dashboard OAuth callback to

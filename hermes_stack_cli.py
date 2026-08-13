@@ -17,6 +17,8 @@ from typing import Iterable, List, Mapping, Optional, Sequence
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STACK_SERVICES = ("hermes", "tailscale", "tailscale-proxy")
+STATE_DIRECTORY_NAME = "hermes-stack"
+LEGACY_STATE_DIRECTORY_NAME = "hermes-docker"
 
 
 class CliError(Exception):
@@ -210,6 +212,27 @@ def canonical_directory(raw_path: str) -> Path:
     if not resolved.is_dir():
         raise CliError(f"Project path is not a directory: {resolved}")
     return resolved
+
+
+def resolve_state_directory(home: Path, allow_legacy: bool = False) -> Path:
+    config_dir = home / ".config"
+    state_dir = config_dir / STATE_DIRECTORY_NAME
+    legacy_state_dir = config_dir / LEGACY_STATE_DIRECTORY_NAME
+    if legacy_state_dir.exists() and not state_dir.exists():
+        if allow_legacy:
+            print(
+                f"Using legacy state at {legacy_state_dir} to stop the stack.\n"
+                f"Move it before the next command:\n  "
+                f"mv {legacy_state_dir} {state_dir}",
+                file=sys.stderr,
+            )
+            return legacy_state_dir
+        raise CliError(
+            f"Legacy state directory found at {legacy_state_dir}. "
+            "Stop the running stack first if necessary, then move it with:\n  "
+            f"mv {legacy_state_dir} {state_dir}"
+        )
+    return state_dir
 
 
 def print_table(headers: Sequence[str], rows: Iterable[Sequence[str]]) -> None:
@@ -494,7 +517,9 @@ def run(arguments: Optional[Sequence[str]] = None) -> int:
         parser.print_help()
         return 1
 
-    state_dir = Path.home() / ".config" / "hermes-docker"
+    state_dir = resolve_state_directory(
+        Path.home(), allow_legacy=args.command == "stop"
+    )
     store = StateStore(state_dir)
     store.ensure_directories()
     store.migrate_legacy_state()

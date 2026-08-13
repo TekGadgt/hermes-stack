@@ -18,7 +18,7 @@ services:
       - "127.0.0.1:7456:7456"
     volumes:
       - ~/.hermes:/opt/data
-      - ${HOME}/.config/hermes-docker/open-design:/opt/open-design-data
+      - ${HOME}/.config/hermes-stack/open-design:/opt/open-design-data
     environment:
       HERMES_HOME: "/opt/data"
       HERMES_DASHBOARD: "1"
@@ -61,7 +61,7 @@ services:
       TS_AUTH_ONCE: "true"
       TS_SERVE_CONFIG: /config/serve.json
     volumes:
-      - ${HOME}/.config/hermes-docker/tailscale-state:/var/lib/tailscale
+      - ${HOME}/.config/hermes-stack/tailscale-state:/var/lib/tailscale
       - ./tailscale:/config:ro
 
   tailscale-proxy:

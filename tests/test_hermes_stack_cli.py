@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hermes_stack_cli import CliError, StateStore, remove_location, update_location
+from hermes_stack_cli import (
+    CliError,
+    StateStore,
+    remove_location,
+    resolve_state_directory,
+    update_location,
+)
 
 
 class StateStoreTests(unittest.TestCase):
@@ -83,6 +89,43 @@ class StateStoreTests(unittest.TestCase):
         self.assertEqual(self.store.load_selection(), ["new"])
         remove_location(self.store, "new")
         self.assertEqual(self.store.load_selection(), [])
+
+
+class StateDirectoryTests(unittest.TestCase):
+    def test_new_install_uses_hermes_stack_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            self.assertEqual(
+                resolve_state_directory(home),
+                home / ".config" / "hermes-stack",
+            )
+
+    def test_legacy_directory_requires_explicit_move(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            legacy = home / ".config" / "hermes-docker"
+            legacy.mkdir(parents=True)
+            with self.assertRaisesRegex(CliError, r"mv .*hermes-docker .*hermes-stack"):
+                resolve_state_directory(home)
+
+    def test_stop_can_use_legacy_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            legacy = home / ".config" / "hermes-docker"
+            legacy.mkdir(parents=True)
+            self.assertEqual(
+                resolve_state_directory(home, allow_legacy=True),
+                legacy,
+            )
+
+    def test_new_directory_wins_when_both_exist(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            legacy = home / ".config" / "hermes-docker"
+            current = home / ".config" / "hermes-stack"
+            legacy.mkdir(parents=True)
+            current.mkdir()
+            self.assertEqual(resolve_state_directory(home), current)
 
 
 if __name__ == "__main__":
