@@ -1,1 +1,18 @@
 .env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+*.log
+
+# Persistent stack state normally lives under ~/.config/hermes-docker.
+# Keep it out of Git if it is ever copied into the repository root.
+/locations.json
+/current-projects
+/current-projects.json
+/compose.projects.json
+/tailscale-state/
+/open-design-data/
