@@ -1,0 +1,23 @@
+diff --git a/apps/web/src/components/EntryShell.tsx b/apps/web/src/components/EntryShell.tsx
+index 1064f4457..b6b3f97b1 100644
+--- a/apps/web/src/components/EntryShell.tsx
++++ b/apps/web/src/components/EntryShell.tsx
+@@ -593,13 +593,13 @@ export function EntryShell({
+   // view from the route rather than keeping it in component state.
+   const route = useRoute();
+   const view: EntryViewKind = route.kind === 'home' ? route.view : 'home';
++  const usesOpenDesignCloud = config.mode === 'daemon' && config.agentId === 'amr';
+   useEffect(() => {
+-    // The entry shell is the authenticated Home surface. A definitive
+-    // signed-out result returns it to the Cloud identity gate while leaving
+-    // the saved model source untouched for passive reauthentication.
+-    if (amrLoggedIn !== false || view === 'onboarding') return;
++    // A signed-out Cloud identity only gates the Cloud agent. Local CLI and
++    // BYOK execution remain usable without a Vela session.
++    if (!usesOpenDesignCloud || amrLoggedIn !== false || view === 'onboarding') return;
+     navigate({ kind: 'home', view: 'onboarding' }, { replace: true });
+-  }, [amrLoggedIn, view]);
++  }, [amrLoggedIn, usesOpenDesignCloud, view]);
+   // The one shared workspace context. Any non-null context is a real workspace
+   // (personal or team); workspace surfaces gate on B's permission bits, not on
+   // workspaceType.

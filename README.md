@@ -43,6 +43,13 @@ existing state under `~/.hermes`. The old Open Design MCP entry is removed at
 container startup so Hermes cannot recursively invoke an OD run that launches
 another Hermes process.
 
+The pinned Open Design v0.19.0 source receives one temporary upstream backport:
+signed-out Open Design Cloud state redirects to onboarding only when the AMR
+cloud agent is selected, so it does not block Hermes. Remove
+`patches/open-design-v0.19-local-agent-cloud-gate.patch` and its Dockerfile
+application after `OPEN_DESIGN_REV` advances to a release containing upstream
+commit [`85d2e4893c`](https://github.com/nexu-io/open-design/commit/85d2e4893c).
+
 ## Tailscale
 
 The stack starts locally without Tailscale authorization. Authorize its

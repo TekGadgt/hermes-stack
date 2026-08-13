@@ -17,10 +17,16 @@ RUN apt-get update \
 
 WORKDIR /src/open-design
 
+# Temporary upstream backport. Remove after OPEN_DESIGN_REV includes commit
+# 85d2e4893c (fix(amr): recover expired cloud sessions, #6786).
+COPY patches/open-design-v0.19-local-agent-cloud-gate.patch /tmp/open-design-local-agent-cloud-gate.patch
+
 RUN git init \
     && git remote add origin https://github.com/nexu-io/open-design.git \
     && git fetch --depth 1 origin "${OPEN_DESIGN_REV}" \
     && git checkout --detach FETCH_HEAD \
+    && git apply --check /tmp/open-design-local-agent-cloud-gate.patch \
+    && git apply /tmp/open-design-local-agent-cloud-gate.patch \
     && corepack enable \
     && corepack prepare pnpm@10.33.2 --activate \
     && pnpm install --frozen-lockfile \
