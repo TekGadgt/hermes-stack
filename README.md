@@ -11,9 +11,29 @@ same project filesystem while keeping their web interfaces on separate ports.
 
 ## Install the launcher
 
-The host needs Docker with the Compose plugin and Python 3.9 or newer. After
-cloning the repository, make the launcher executable and link it into a
-user-owned binary directory:
+The host needs Docker with the Compose plugin and Python 3.9 or newer.
+
+The container runtime must also have enough capacity for the limits in
+`compose.yaml`. Allocate at least 4 CPUs, 10 GiB of memory, and 60 GiB of disk
+to the Docker VM. For concurrent Hermes profiles, Kanban workers, browser
+automation, and persistent project dependencies, 6 CPUs, 12 GiB of memory, and
+100 GiB of disk are recommended. These are VM-wide resources; the current
+Hermes service may use up to 4 CPUs and 8 GiB, while Docker and the sidecars
+need the remaining headroom.
+
+For an existing Colima VM, stop it and restart it with the larger allocation:
+
+```console
+colima stop
+colima start --cpus 6 --memory 12 --disk 100
+```
+
+Increasing an existing Colima disk preserves its Docker data, but the disk
+cannot later be shrunk. Configure equivalent VM resources in Docker Desktop or
+another container runtime.
+
+After confirming the runtime capacity and cloning the repository, make the
+launcher executable and link it into a user-owned binary directory:
 
 ```console
 chmod +x hermes-stack
