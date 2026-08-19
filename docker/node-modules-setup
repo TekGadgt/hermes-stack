@@ -1,0 +1,30 @@
+#!/command/with-contenv python3
+"""Make generated Linux dependency volumes writable by the Hermes user."""
+
+import json
+import os
+import pwd
+from pathlib import Path
+
+
+manifest_path = Path(
+    os.environ.get(
+        "HERMES_STACK_WORKSPACE_MANIFEST",
+        "/run/hermes-stack/workspaces.json",
+    )
+)
+if manifest_path.is_file():
+    hermes = pwd.getpwnam("hermes")
+    with manifest_path.open(encoding="utf-8") as handle:
+        workspaces = json.load(handle).get("workspaces", [])
+    seen = set()
+    for workspace in workspaces:
+        if not workspace.get("node_project"):
+            continue
+        for root_key in ("workspace_path", "host_path"):
+            target = Path(workspace[root_key]) / "node_modules"
+            identity = os.stat(target).st_dev, os.stat(target).st_ino
+            if identity in seen:
+                continue
+            seen.add(identity)
+            os.chown(target, hermes.pw_uid, hermes.pw_gid)

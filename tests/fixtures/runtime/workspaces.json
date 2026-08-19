@@ -4,7 +4,9 @@
     {
       "name": "hermes-stack",
       "workspace_path": "/workspace/hermes-stack",
-      "host_path": "${PWD}"
+      "host_path": "${PWD}",
+      "node_project": false,
+      "obsidian_vault": false
     }
   ]
 }

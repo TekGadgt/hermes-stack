@@ -21,6 +21,12 @@ portable `host_path`. Both paths address the same bind-mounted files.
   them.
 - Never treat the two paths in one entry as separate copies, and never dispatch
   duplicate agents against both representations.
+- When `node_project` is true, both container paths share a persistent Linux
+  `node_modules` overlay. Never record paths into that directory as portable or
+  replace it with dependencies from the host.
+- When `obsidian_vault` is true, `.obsidian` is intentionally read-only to
+  Hermes. Work with vault content without changing synchronized plugins or
+  configuration.
 
 ## Example
 

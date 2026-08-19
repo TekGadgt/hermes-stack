@@ -11,9 +11,29 @@ same project filesystem while keeping their web interfaces on separate ports.
 
 ## Install the launcher
 
-The host needs Docker with the Compose plugin and Python 3.9 or newer. After
-cloning the repository, make the launcher executable and link it into a
-user-owned binary directory:
+The host needs Docker with the Compose plugin and Python 3.9 or newer.
+
+The container runtime must also have enough capacity for the limits in
+`compose.yaml`. Allocate at least 4 CPUs, 10 GiB of memory, and 60 GiB of disk
+to the Docker VM. For concurrent Hermes profiles, Kanban workers, browser
+automation, and persistent project dependencies, 6 CPUs, 12 GiB of memory, and
+100 GiB of disk are recommended. These are VM-wide resources; the current
+Hermes service may use up to 4 CPUs and 8 GiB, while Docker and the sidecars
+need the remaining headroom.
+
+For an existing Colima VM, stop it and restart it with the larger allocation:
+
+```console
+colima stop
+colima start --cpus 6 --memory 12 --disk 100
+```
+
+Increasing an existing Colima disk preserves its Docker data, but the disk
+cannot later be shrunk. Configure equivalent VM resources in Docker Desktop or
+another container runtime.
+
+After confirming the runtime capacity and cloning the repository, make the
+launcher executable and link it into a user-owned binary directory:
 
 ```console
 chmod +x hermes-stack
@@ -79,6 +99,8 @@ Inspect or edit the registry with:
 ```console
 hermes-stack locations
 hermes-stack locations add app /absolute/path/to/app
+hermes-stack locations set app --node auto
+hermes-stack locations reset-node-modules app
 hermes-stack locations remove app
 hermes-stack projects
 ```
@@ -89,6 +111,18 @@ selection, and runtime workspace-manifest files are human-readable JSON written
 atomically. Existing `current-projects` state from the Fish wrapper is imported
 automatically. The CLI uses only the Python 3.9+ standard library, so it does
 not require a package manager or a separate virtual environment on the host.
+
+Locations use `node: auto` by default. A root `package.json` enables a
+persistent Linux-only `node_modules` volume, mounted over `node_modules` at
+both container path representations. The host's macOS dependencies remain
+untouched and hidden inside the container; install once inside Hermes and
+reuse that Linux dependency tree across restarts and image rebuilds. Override
+detection with `--node on` or `--node off`. Resetting dependencies removes only
+that location's Linux volume and requires the stack not to be using it.
+
+Only `node_modules` is isolated. Framework caches and outputs such as `.next`,
+`.nuxt`, `.vite`, and `dist` remain in the shared project, and simultaneous
+host/container servers must still use different ports.
 
 Each selected directory is mounted read-write at two synchronized paths:
 
@@ -134,6 +168,45 @@ hermes-stack shell
 
 Fish is that user's login shell. Supervised services and automated tool calls
 continue to use their explicitly configured interpreters.
+
+## Obsidian Headless mirror
+
+Obsidian Headless can act as a third Sync client alongside independent Windows
+and Mac desktop vaults. Create a dedicated, initially empty host directory for
+the headless mirror; do not reuse either desktop client's local vault folder.
+Register and configure it without placing account credentials in this
+repository or an environment file:
+
+```console
+mkdir -p /absolute/path/to/dev-vault-headless
+hermes-stack locations add dev-vault /absolute/path/to/dev-vault-headless
+hermes-stack obsidian configure dev-vault
+hermes-stack obsidian login
+hermes-stack obsidian setup --vault "Dev-Vault"
+```
+
+`login` prompts interactively for the Obsidian account, password, and MFA.
+`setup` accepts a remote vault name or ID and prompts for an end-to-end
+encryption password when required. The authentication token and headless sync
+database persist beneath `~/.config/hermes-stack/obsidian-headless`, which is
+mounted only into the sidecar.
+
+After the next user-initiated stack restart, the sidecar runs bidirectional
+continuous sync with all attachment and Obsidian configuration categories,
+including community plugins and plugin data. It keeps syncing its mirror even
+when the saved location is not selected for Hermes. Select `dev-vault` in the
+normal `start` command when Hermes should access its notes.
+
+When selected, the mirror uses the same dual workspace mounts as other
+locations. Nested read-only mounts protect `.obsidian` at both Hermes paths,
+while the sidecar retains read-write access. Hermes can edit notes and
+attachments but cannot distribute changed plugin JavaScript or configuration
+to desktop clients. Use `hermes-stack obsidian status`, `logs obsidian`, or
+`obsidian disable` to inspect or disable the integration. Disabling does not
+delete credentials, unlink the remote vault, or change the running stack.
+
+Obsidian Headless is still beta. Concurrent edits to the same note can conflict
+like edits from any independent Sync clients, so keep the dev vault backed up.
 
 ## Native Open Design agent
 
@@ -217,9 +290,10 @@ The stack assumes a single-user host and a trusted tailnet:
   Any process running as the local user can still reach OD through its loopback
   port, so this is not isolation from other local processes or users.
 - Hermes authentication under `~/.hermes`, OD state, Tailscale node state, and
-  the project-location registry are sensitive runtime data stored outside this
-  repository. Do not copy them into the repository or publish a snapshot made
-  from a running container with `docker commit`.
+  Obsidian Headless credentials, and the project-location registry are
+  sensitive runtime data stored outside this repository. Obsidian credentials
+  are available only to its sidecar. Do not copy this state into the repository
+  or publish a snapshot made from a running container with `docker commit`.
 - Selected host projects are mounted read-write at both their `/workspace`
   alias and original absolute path. These are two names for the same files and
   do not expose either path's parent or sibling directories. Hermes sessions
@@ -234,7 +308,9 @@ the authenticated Hermes runtime.
 
 External container and build images use readable release tags plus immutable
 multi-platform SHA-256 digests. The Open Design source revision and CLI tool
-versions are pinned separately in `compose.yaml` and `Dockerfile.hermes`.
+versions are pinned separately in `compose.yaml` and the Dockerfiles. The
+locally built Obsidian sidecar pins the official `obsidian-headless` npm package
+and is not published as a redistributed image.
 
 `hermes-stack update` rebuilds and restarts the reviewed versions in this
 repository; it does not silently advance pinned dependencies. On GitHub,

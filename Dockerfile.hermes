@@ -43,7 +43,6 @@ ARG PNPM_VERSION=11.21.0
 ARG PLAYWRIGHT_VERSION=1.62.1
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-ENV PATH=/opt/hermes/.venv/bin:/usr/local/bin:/usr/bin:/bin
 
 RUN npm install --global \
     "pnpm@${PNPM_VERSION}" \
@@ -75,6 +74,7 @@ COPY skills/workspace-paths /opt/hermes/skills/workspace-paths
 COPY docker/open-design-run /etc/s6-overlay/s6-rc.d/open-design/run
 COPY docker/open-design-type /etc/s6-overlay/s6-rc.d/open-design/type
 COPY docker/open-design-setup /etc/cont-init.d/03-open-design-setup
+COPY docker/node-modules-setup /etc/cont-init.d/04-node-modules-setup
 
 RUN mkdir -p \
         /etc/s6-overlay/s6-rc.d/open-design/dependencies.d \
@@ -83,9 +83,9 @@ RUN mkdir -p \
     && touch \
         /etc/s6-overlay/s6-rc.d/open-design/dependencies.d/base \
         /etc/s6-overlay/s6-rc.d/user/contents.d/open-design \
-    && ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes \
     && chown -R hermes:hermes /opt/open-design-data \
     && chmod -R a+rX /opt/open-design /opt/open-design-node \
     && chmod 0755 \
         /etc/s6-overlay/s6-rc.d/open-design/run \
-        /etc/cont-init.d/03-open-design-setup
+        /etc/cont-init.d/03-open-design-setup \
+        /etc/cont-init.d/04-node-modules-setup

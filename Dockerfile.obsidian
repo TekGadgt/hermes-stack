@@ -1,0 +1,16 @@
+FROM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03
+
+ARG OBSIDIAN_HEADLESS_VERSION=0.0.14
+
+RUN npm install --global --allow-scripts=better-sqlite3 \
+        "obsidian-headless@${OBSIDIAN_HEADLESS_VERSION}" \
+    && test "$(ob --version)" = "${OBSIDIAN_HEADLESS_VERSION}" \
+    && mkdir -p /state/obsidian-headless /vault \
+    && chmod 0755 /state /state/obsidian-headless /vault
+
+ENV HOME=/state
+ENV XDG_CONFIG_HOME=/state
+
+WORKDIR /vault
+
+CMD ["ob", "sync", "--path", "/vault", "--continuous"]
