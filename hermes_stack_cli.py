@@ -20,6 +20,12 @@ from typing import Iterable, List, Mapping, Optional, Sequence
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 BASE_STACK_SERVICES = ("hermes", "tailscale", "tailscale-proxy")
 OBSIDIAN_SERVICE = "obsidian-sync"
+COMPLETION_SHELLS = ("fish", "bash", "zsh")
+COMPLETION_FILES = {
+    "fish": "hermes-stack.fish",
+    "bash": "hermes-stack.bash",
+    "zsh": "_hermes-stack",
+}
 STATE_DIRECTORY_NAME = "hermes-stack"
 LEGACY_STATE_DIRECTORY_NAME = "hermes-docker"
 WORKSPACE_MANIFEST_CONTAINER_PATH = "/run/hermes-stack/workspaces.json"
@@ -567,6 +573,40 @@ def resolve_state_directory(home: Path, allow_legacy: bool = False) -> Path:
     return state_dir
 
 
+def completion_location_names(home: Path) -> List[str]:
+    """Read saved names without creating, migrating, or repairing state."""
+    config_dir = home / ".config"
+    state_dir = config_dir / STATE_DIRECTORY_NAME
+    legacy_state_dir = config_dir / LEGACY_STATE_DIRECTORY_NAME
+    if not state_dir.exists() and legacy_state_dir.exists():
+        state_dir = legacy_state_dir
+    store = StateStore(state_dir)
+    try:
+        locations = store.load_locations()
+        if locations:
+            return list(locations)
+        if not store.legacy_selection_file.is_file():
+            return []
+        names = []
+        for line in store.legacy_selection_file.read_text(encoding="utf-8").splitlines():
+            name, separator, _ = line.partition("=")
+            if separator and NAME_PATTERN.fullmatch(name):
+                names.append(name)
+        return list(dict.fromkeys(names))
+    except (CliError, OSError):
+        # Shell completion must stay silent when state is absent or temporarily
+        # unreadable; the real command will report a useful error when invoked.
+        return []
+
+
+def render_completions(shell: str, stack_dir: Path) -> str:
+    completion_file = stack_dir / "completions" / COMPLETION_FILES[shell]
+    try:
+        return completion_file.read_text(encoding="utf-8")
+    except OSError as error:
+        raise CliError(f"Could not read completion template: {completion_file}") from error
+
+
 def print_table(headers: Sequence[str], rows: Iterable[Sequence[str]]) -> None:
     materialized = [tuple(row) for row in rows]
     widths = [len(header) for header in headers]
@@ -855,6 +895,14 @@ def build_parser(command_name: str) -> argparse.ArgumentParser:
     obsidian_subparsers.add_parser("status", help="show headless sync status")
     obsidian_subparsers.add_parser("disable", help="disable automatic headless sync")
 
+    completions = subparsers.add_parser(
+        "completions", help="print shell completion definitions"
+    )
+    completions.add_argument("shell", choices=COMPLETION_SHELLS)
+    completions.add_argument(
+        "--location-names", action="store_true", help=argparse.SUPPRESS
+    )
+
     subparsers.add_parser("shell", help="open Fish as the unprivileged Hermes user")
     subparsers.add_parser("update", help="pull, rebuild, and restart the stack")
     subparsers.add_parser("tailscale-login", help="authorize the persistent Tailscale node")
@@ -987,6 +1035,14 @@ def run(arguments: Optional[Sequence[str]] = None) -> int:
     if args.command is None:
         parser.print_help()
         return 1
+
+    if args.command == "completions":
+        if args.location_names:
+            for name in completion_location_names(Path.home()):
+                print(name)
+        else:
+            print(render_completions(args.shell, stack_dir), end="")
+        return 0
 
     state_dir = resolve_state_directory(
         Path.home(), allow_legacy=args.command == "stop"

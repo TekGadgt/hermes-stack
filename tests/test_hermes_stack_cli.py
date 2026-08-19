@@ -1,8 +1,11 @@
+import io
 import json
 import stat
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_stack_cli import (
     CliError,
@@ -11,10 +14,13 @@ from hermes_stack_cli import (
     WORKSPACE_MANIFEST_CONTAINER_PATH,
     WORKSPACE_RUNTIME_CONTAINER_DIRECTORY,
     WORKSPACE_SYSTEM_PROMPT,
+    completion_location_names,
     configure_obsidian,
     node_modules_volume,
     remove_location,
+    render_completions,
     resolve_state_directory,
+    run,
     update_location,
     validate_workspace_directory,
 )
@@ -376,6 +382,62 @@ class StateDirectoryTests(unittest.TestCase):
             legacy.mkdir(parents=True)
             current.mkdir()
             self.assertEqual(resolve_state_directory(home), current)
+
+
+class CompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.home = self.root / "home"
+        self.home.mkdir()
+        self.store = StateStore(self.home / ".config" / "hermes-stack")
+        self.store.ensure_directories()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_location_names_are_live_ordered_and_read_only(self):
+        alpha = self.root / "alpha"
+        beta = self.root / "beta"
+        alpha.mkdir()
+        beta.mkdir()
+        self.store.resolve_selection([f"alpha={alpha}", f"beta={beta}"])
+        registry_before = self.store.locations_file.read_text()
+        self.assertEqual(completion_location_names(self.home), ["alpha", "beta"])
+        self.assertEqual(self.store.locations_file.read_text(), registry_before)
+
+    def test_legacy_location_names_are_available_without_migration(self):
+        legacy_home = self.root / "legacy-home"
+        legacy = legacy_home / ".config" / "hermes-docker"
+        legacy.mkdir(parents=True)
+        legacy_file = legacy / "current-projects"
+        legacy_file.write_text("alpha=/tmp/alpha\nbeta=/tmp/beta\nalpha=/tmp/other\n")
+        self.assertEqual(completion_location_names(legacy_home), ["alpha", "beta"])
+        self.assertFalse((legacy / "locations.json").exists())
+
+    def test_invalid_registry_does_not_break_shell_completion(self):
+        self.store.locations_file.write_text("not json")
+        self.assertEqual(completion_location_names(self.home), [])
+
+    def test_templates_cover_supported_shells_and_dynamic_locations(self):
+        stack_dir = Path(__file__).resolve().parents[1]
+        for shell in ("fish", "bash", "zsh"):
+            with self.subTest(shell=shell):
+                script = render_completions(shell, stack_dir)
+                self.assertIn("hermes-stack completions", script)
+                self.assertIn("--location-names", script)
+                self.assertIn("reset-node-modules", script)
+                self.assertIn("obsidian", script)
+
+    def test_completion_output_does_not_initialize_state(self):
+        empty_home = self.root / "empty-home"
+        empty_home.mkdir()
+        output = io.StringIO()
+        with patch("hermes_stack_cli.Path.home", return_value=empty_home):
+            with redirect_stdout(output):
+                self.assertEqual(run(["completions", "fish"]), 0)
+        self.assertIn("complete -c hermes-stack", output.getvalue())
+        self.assertFalse((empty_home / ".config").exists())
 
 
 class WorkspacePolicyTests(unittest.TestCase):
