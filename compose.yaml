@@ -48,6 +48,23 @@ services:
       retries: 12
       start_period: 20s
 
+  obsidian-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile.obsidian
+      args:
+        OBSIDIAN_HEADLESS_VERSION: "0.0.14"
+    image: local/obsidian-headless:0.0.14
+    restart: unless-stopped
+    command: ["ob", "sync", "--path", "/vault", "--continuous"]
+    environment:
+      HOME: "/state"
+      XDG_CONFIG_HOME: "/state"
+    working_dir: /vault
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
   tailscale:
     image: tailscale/tailscale:v1.102.2@sha256:321ce041508c19079b57a28b6666c8d81ab0b08accc0a2585b3ab663d557ac24
     container_name: hermes-stack-tailscale

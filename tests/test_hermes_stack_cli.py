@@ -6,10 +6,13 @@ from pathlib import Path
 
 from hermes_stack_cli import (
     CliError,
+    Location,
     StateStore,
     WORKSPACE_MANIFEST_CONTAINER_PATH,
     WORKSPACE_RUNTIME_CONTAINER_DIRECTORY,
     WORKSPACE_SYSTEM_PROMPT,
+    configure_obsidian,
+    node_modules_volume,
     remove_location,
     resolve_state_directory,
     update_location,
@@ -48,14 +51,16 @@ class StateStoreTests(unittest.TestCase):
         self.store.resolve_selection([f"new-name={self.alpha}"])
         self.assertEqual(
             self.store.load_locations(),
-            {"new-name": str(self.alpha.resolve())},
+            {"new-name": Location(str(self.alpha.resolve()))},
         )
         self.assertEqual(self.store.load_selection(), ["new-name"])
 
     def test_reassigning_name_overwrites_its_path(self):
         self.store.resolve_selection([f"app={self.alpha}"])
         self.store.resolve_selection([f"app={self.beta}"])
-        self.assertEqual(self.store.load_locations()["app"], str(self.beta.resolve()))
+        self.assertEqual(
+            self.store.load_locations()["app"], Location(str(self.beta.resolve()))
+        )
 
     def test_unknown_bare_name_does_not_change_state(self):
         self.store.resolve_selection([f"alpha={self.alpha}"])
@@ -101,11 +106,15 @@ class StateStoreTests(unittest.TestCase):
                         "name": "alpha",
                         "workspace_path": "/workspace/alpha",
                         "host_path": alpha,
+                        "node_project": False,
+                        "obsidian_vault": False,
                     },
                     {
                         "name": "beta",
                         "workspace_path": "/workspace/beta",
                         "host_path": beta,
+                        "node_project": False,
+                        "obsidian_vault": False,
                     },
                 ],
             },
@@ -169,6 +178,160 @@ class StateStoreTests(unittest.TestCase):
             list(legacy_store.load_locations()),
             ["alpha", "beta"],
         )
+
+    def test_version_one_registry_is_migrated_to_structured_entries(self):
+        self.store.locations_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "locations": {"alpha": str(self.alpha.resolve())},
+                }
+            )
+        )
+        self.store.migrate_location_registry()
+        self.assertEqual(
+            json.loads(self.store.locations_file.read_text()),
+            {
+                "version": 2,
+                "locations": {
+                    "alpha": {"path": str(self.alpha.resolve()), "node": "auto"}
+                },
+            },
+        )
+
+    def test_version_two_registry_rejects_invalid_node_mode(self):
+        self.store.locations_file.write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "locations": {
+                        "alpha": {
+                            "path": str(self.alpha.resolve()),
+                            "node": "sometimes",
+                        }
+                    },
+                }
+            )
+        )
+        with self.assertRaisesRegex(CliError, "Invalid location entry"):
+            self.store.load_locations()
+
+    def test_node_modes_generate_persistent_dual_overlays(self):
+        (self.alpha / "package.json").write_text("{}")
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        locations = self.store.load_locations()
+        locations["beta"] = Location(locations["beta"].path, "on")
+        self.store.save_locations(locations)
+        self.store.generate_override()
+        document = json.loads(self.store.override_file.read_text())
+        alpha_key, alpha_volume = node_modules_volume(str(self.alpha.resolve()))
+        beta_key, beta_volume = node_modules_volume(str(self.beta.resolve()))
+        self.assertEqual(
+            document["volumes"],
+            {
+                alpha_key: {"name": alpha_volume},
+                beta_key: {"name": beta_volume},
+            },
+        )
+        module_mounts = [
+            volume
+            for volume in document["services"]["hermes"]["volumes"]
+            if volume["type"] == "volume"
+        ]
+        self.assertEqual(
+            [mount["target"] for mount in module_mounts],
+            [
+                "/workspace/alpha/node_modules",
+                f"{self.alpha.resolve()}/node_modules",
+                "/workspace/beta/node_modules",
+                f"{self.beta.resolve()}/node_modules",
+            ],
+        )
+        self.assertTrue(all(mount["volume"] == {"nocopy": True} for mount in module_mounts))
+
+    def test_auto_node_detection_is_refreshed_when_package_json_changes(self):
+        self.store.resolve_selection([f"alpha={self.alpha}"])
+        self.assertFalse(self.store.selected_workspaces()[0].node_project)
+        (self.alpha / "package.json").write_text("{}")
+        self.assertTrue(self.store.selected_workspaces()[0].node_project)
+        (self.alpha / "package.json").unlink()
+        self.assertFalse(self.store.selected_workspaces()[0].node_project)
+
+    def test_node_off_suppresses_detection_and_volume_mounts(self):
+        (self.alpha / "package.json").write_text("{}")
+        self.store.resolve_selection([f"alpha={self.alpha}"])
+        locations = self.store.load_locations()
+        locations["alpha"] = Location(locations["alpha"].path, "off")
+        self.store.save_locations(locations)
+        self.store.generate_override()
+        document = json.loads(self.store.override_file.read_text())
+        self.assertFalse(self.store.selected_workspaces()[0].node_project)
+        self.assertNotIn("volumes", document)
+
+    def test_node_volume_identity_survives_location_rename(self):
+        self.store.resolve_selection([f"old={self.alpha}"])
+        locations = self.store.load_locations()
+        locations["old"] = Location(locations["old"].path, "on")
+        self.store.save_locations(locations)
+        self.store.generate_override()
+        before = json.loads(self.store.override_file.read_text())["volumes"]
+        update_location(self.store, "new", str(self.alpha))
+        self.store.generate_override()
+        after = json.loads(self.store.override_file.read_text())["volumes"]
+        self.assertEqual(after, before)
+        self.assertEqual(
+            node_modules_volume(str(self.alpha / ".." / self.alpha.name)),
+            node_modules_volume(str(self.alpha.resolve())),
+        )
+
+    def test_obsidian_sidecar_isolated_and_config_read_only_to_hermes(self):
+        self.store.resolve_selection([f"alpha={self.alpha}"])
+        configure_obsidian(self.store, "alpha")
+        self.store.generate_override()
+        document = json.loads(self.store.override_file.read_text())
+        hermes_volumes = document["services"]["hermes"]["volumes"]
+        protected = [
+            volume for volume in hermes_volumes
+            if volume["target"].endswith("/.obsidian")
+        ]
+        self.assertEqual(
+            [volume["target"] for volume in protected],
+            ["/workspace/alpha/.obsidian", f"{self.alpha.resolve()}/.obsidian"],
+        )
+        self.assertTrue(all(volume["read_only"] for volume in protected))
+        sidecar = document["services"]["obsidian-sync"]
+        self.assertEqual(sidecar["volumes"][0]["source"], str(self.alpha.resolve()))
+        self.assertEqual(sidecar["volumes"][0]["target"], "/vault")
+        self.assertNotIn("read_only", sidecar["volumes"][0])
+        self.assertEqual(
+            sidecar["volumes"][1],
+            {
+                "type": "bind",
+                "source": str(self.store.obsidian_state_directory.resolve()),
+                "target": "/state/obsidian-headless",
+            },
+        )
+        self.assertNotIn(
+            str(self.store.obsidian_state_directory.resolve()),
+            json.dumps(hermes_volumes),
+        )
+
+    def test_unselected_obsidian_mirror_only_appears_in_sidecar(self):
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        configure_obsidian(self.store, "beta")
+        self.store.resolve_selection(["alpha"])
+        self.store.generate_override()
+        document = json.loads(self.store.override_file.read_text())
+        self.assertEqual(
+            document["services"]["obsidian-sync"]["volumes"][0]["source"],
+            str(self.beta.resolve()),
+        )
+        self.assertNotIn(
+            str(self.beta.resolve()),
+            json.dumps(document["services"]["hermes"]),
+        )
+        manifest = json.loads(self.store.workspace_manifest_file.read_text())
+        self.assertEqual([entry["name"] for entry in manifest["workspaces"]], ["alpha"])
 
     def test_location_commands_keep_selection_consistent(self):
         self.store.resolve_selection([f"old={self.alpha}"])
