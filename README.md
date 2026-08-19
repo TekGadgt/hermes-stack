@@ -62,6 +62,40 @@ Open a new shell (or source the Bash/Zsh startup file) before invoking
 `hermes-stack`. The symlink continues to work if the repository contents are
 updated in place. Recreate it after moving or renaming the repository directory.
 
+### Shell completions
+
+The launcher generates dependency-free completions for Fish, Bash, and Zsh.
+Saved location names are read live from the registry, so adding or renaming a
+location does not require regenerating the completion file.
+
+For Fish:
+
+```console
+mkdir -p ~/.config/fish/completions
+hermes-stack completions fish > ~/.config/fish/completions/hermes-stack.fish
+```
+
+For Bash, add this line to `~/.bashrc`:
+
+```bash
+eval "$(hermes-stack completions bash)"
+```
+
+For Zsh, generate an autoloadable completion and add its directory to `fpath`
+before calling `compinit`:
+
+```console
+mkdir -p ~/.zfunc
+hermes-stack completions zsh > ~/.zfunc/_hermes-stack
+```
+
+```zsh
+# ~/.zshrc
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
 Existing installations using the old state directory should stop the running
 stack and move it before issuing any other command with this version:
 

@@ -1,0 +1,107 @@
+#compdef hermes-stack
+
+_hermes_stack_location_names() {
+    local -a locations
+    locations=("${(@f)$(command hermes-stack completions zsh --location-names 2>/dev/null)}")
+    _describe 'saved location' locations
+}
+
+_hermes_stack() {
+    local command action
+    local -a commands location_actions obsidian_actions
+    commands=(
+        'start:Start with saved project locations'
+        'stop:Stop all stack services'
+        'restart:Restart with the current selection'
+        'status:Show service status'
+        'logs:Follow service logs'
+        'projects:Show the current project selection'
+        'locations:List or edit saved locations'
+        'obsidian:Configure the Obsidian mirror'
+        'completions:Print shell completion definitions'
+        'shell:Open the Hermes container shell'
+        'update:Pull, rebuild, and restart'
+        'tailscale-login:Authorize Tailscale'
+        'tailscale-status:Show Tailscale status'
+        'tailscale-urls:Show local and tailnet URLs'
+    )
+    location_actions=(
+        'list:List saved locations'
+        'add:Add or update a location'
+        'set:Change location options'
+        'reset-node-modules:Reset Linux dependencies'
+        'remove:Remove a saved location'
+    )
+    obsidian_actions=(
+        'configure:Choose the mirror location'
+        'login:Log in to Obsidian'
+        'setup:Connect the remote vault'
+        'status:Show sync status'
+        'disable:Disable continuous sync'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe 'command' commands
+        return
+    fi
+
+    command="$words[2]"
+    case "$command" in
+        start)
+            _hermes_stack_location_names
+            ;;
+        logs)
+            _values 'log target' hermes open-design obsidian tailscale all
+            ;;
+        completions)
+            _values 'shell' fish bash zsh
+            ;;
+        locations)
+            if (( CURRENT == 3 )); then
+                _describe 'action' location_actions
+                return
+            fi
+            action="$words[3]"
+            if [[ "$words[CURRENT-1]" == --node ]]; then
+                _values 'node mode' auto on off
+                return
+            fi
+            case "$action" in
+                add)
+                    if [[ "$PREFIX" == -* ]]; then
+                        compadd -- --node
+                    elif (( CURRENT >= 5 )); then
+                        _directories
+                    fi
+                    ;;
+                set)
+                    if (( CURRENT == 4 )); then
+                        _hermes_stack_location_names
+                    else
+                        compadd -- --node
+                    fi
+                    ;;
+                reset-node-modules|remove)
+                    _hermes_stack_location_names
+                    ;;
+            esac
+            ;;
+        obsidian)
+            if (( CURRENT == 3 )); then
+                _describe 'action' obsidian_actions
+                return
+            fi
+            action="$words[3]"
+            case "$action" in
+                configure)
+                    _hermes_stack_location_names
+                    ;;
+                setup)
+                    compadd -- --vault --device-name
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_hermes_stack "$@"
