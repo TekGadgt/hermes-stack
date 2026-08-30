@@ -8,7 +8,7 @@ _hermes_stack_location_names() {
 
 _hermes_stack() {
     local command action
-    local -a commands location_actions obsidian_actions
+    local -a commands location_actions obsidian_actions vscode_actions
     commands=(
         'start:Start with saved project locations'
         'stop:Stop all stack services'
@@ -18,6 +18,7 @@ _hermes_stack() {
         'projects:Show the current project selection'
         'locations:List or edit saved locations'
         'obsidian:Configure the Obsidian mirror'
+        'vscode:Configure tailnet VS Code'
         'completions:Print shell completion definitions'
         'shell:Open the Hermes container shell'
         'update:Pull, rebuild, and restart'
@@ -39,6 +40,13 @@ _hermes_stack() {
         'status:Show sync status'
         'disable:Disable continuous sync'
     )
+    vscode_actions=(
+        'enable:Enable VS Code on next start'
+        'disable:Disable VS Code on next start'
+        'status:Show configured and running status'
+        'password:Show the current password'
+        'reset-password:Rotate the password'
+    )
 
     if (( CURRENT == 2 )); then
         _describe 'command' commands
@@ -48,10 +56,10 @@ _hermes_stack() {
     command="$words[2]"
     case "$command" in
         start)
-            _hermes_stack_location_names
+            _arguments '--add[retain current projects and add locations]' '*:saved location:_hermes_stack_location_names'
             ;;
         logs)
-            _values 'log target' hermes open-design obsidian tailscale all
+            _values 'log target' hermes open-design obsidian vscode tailscale all
             ;;
         completions)
             _values 'shell' fish bash zsh
@@ -100,6 +108,11 @@ _hermes_stack() {
                     compadd -- --vault --device-name
                     ;;
             esac
+            ;;
+        vscode)
+            if (( CURRENT == 3 )); then
+                _describe 'action' vscode_actions
+            fi
             ;;
     esac
 }

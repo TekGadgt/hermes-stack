@@ -9,11 +9,14 @@ from unittest.mock import patch
 
 from hermes_stack_cli import (
     CliError,
+    DEV_SERVER_PORT,
     Location,
     StateStore,
+    VSCODE_PORT,
     WORKSPACE_MANIFEST_CONTAINER_PATH,
     WORKSPACE_RUNTIME_CONTAINER_DIRECTORY,
     WORKSPACE_SYSTEM_PROMPT,
+    build_parser,
     completion_location_names,
     configure_obsidian,
     node_modules_volume,
@@ -21,6 +24,7 @@ from hermes_stack_cli import (
     render_completions,
     resolve_state_directory,
     run,
+    tailscale_serve_document,
     update_location,
     validate_workspace_directory,
 )
@@ -74,6 +78,37 @@ class StateStoreTests(unittest.TestCase):
             self.store.resolve_selection(["missing"])
         self.assertEqual(self.store.load_selection(), ["alpha"])
 
+    def test_additive_selection_preserves_order_and_adds_registered_locations(self):
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        self.store.resolve_selection(["alpha"])
+        self.assertEqual(
+            self.store.resolve_selection(["beta", "alpha"], add=True),
+            ["alpha", "beta"],
+        )
+
+    def test_additive_selection_registers_new_location(self):
+        gamma = self.root / "gamma"
+        gamma.mkdir()
+        self.store.resolve_selection([f"alpha={self.alpha}"])
+        self.assertEqual(
+            self.store.resolve_selection([f"gamma={gamma}"], add=True),
+            ["alpha", "gamma"],
+        )
+
+    def test_additive_rename_replaces_active_alias_in_place(self):
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        self.assertEqual(
+            self.store.resolve_selection([f"renamed={self.alpha}"], add=True),
+            ["renamed", "beta"],
+        )
+        self.assertNotIn("alpha", self.store.load_locations())
+
+    def test_normal_selection_still_replaces_and_rejects_duplicates(self):
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        self.assertEqual(self.store.resolve_selection(["beta"]), ["beta"])
+        with self.assertRaisesRegex(CliError, "Duplicate project name"):
+            self.store.resolve_selection(["beta", "beta"])
+
     def test_override_uses_dual_paths_and_runtime_contract(self):
         self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
         self.store.generate_override()
@@ -101,7 +136,20 @@ class StateStoreTests(unittest.TestCase):
                 "HERMES_EPHEMERAL_SYSTEM_PROMPT": WORKSPACE_SYSTEM_PROMPT,
                 "HERMES_STACK_WORKSPACE_MANIFEST": WORKSPACE_MANIFEST_CONTAINER_PATH,
                 "HERMES_WRITE_SAFE_ROOT": f"/workspace:/opt/data:{alpha}:{beta}",
+                "HERMES_STACK_DEV_SERVER_HOST": "0.0.0.0",
+                "HERMES_STACK_DEV_SERVER_PORT": str(DEV_SERVER_PORT),
             },
+        )
+        self.assertEqual(
+            document["services"]["tailscale"]["volumes"],
+            [
+                {
+                    "type": "bind",
+                    "source": str(self.store.tailscale_runtime_directory.resolve()),
+                    "target": "/run/hermes-stack/tailscale",
+                    "read_only": True,
+                }
+            ],
         )
         self.assertEqual(
             json.loads(self.store.workspace_manifest_file.read_text()),
@@ -137,6 +185,92 @@ class StateStoreTests(unittest.TestCase):
             stat.S_IMODE(self.store.runtime_manifest_file.stat().st_mode),
             0o644,
         )
+
+    def test_tailscale_serve_preview_is_always_private_and_vscode_is_optional(self):
+        disabled = tailscale_serve_document(False)
+        self.assertIn(str(DEV_SERVER_PORT), disabled["TCP"])
+        self.assertNotIn(str(VSCODE_PORT), disabled["TCP"])
+        self.assertFalse(
+            disabled["AllowFunnel"][f"${{TS_CERT_DOMAIN}}:{DEV_SERVER_PORT}"]
+        )
+        enabled = tailscale_serve_document(True)
+        self.assertIn(str(VSCODE_PORT), enabled["TCP"])
+        self.assertEqual(
+            enabled["Web"][f"${{TS_CERT_DOMAIN}}:{VSCODE_PORT}"]["Handlers"]["/"]["Proxy"],
+            f"http://127.0.0.1:{VSCODE_PORT}",
+        )
+        fixture = (
+            Path(__file__).resolve().parent
+            / "fixtures"
+            / "runtime"
+            / "tailscale"
+            / "serve.json"
+        )
+        self.assertEqual(json.loads(fixture.read_text()), disabled)
+
+    def test_vscode_password_is_private_stable_and_rotatable(self):
+        first = self.store.ensure_vscode_config()
+        self.assertEqual(first, self.store.ensure_vscode_config())
+        self.assertEqual(stat.S_IMODE(self.store.vscode_config_file.stat().st_mode), 0o600)
+        self.assertEqual(
+            stat.S_IMODE(self.store.vscode_state_directory.stat().st_mode), 0o700
+        )
+        second = self.store.ensure_vscode_config(reset=True)
+        self.assertNotEqual(first, second)
+
+    def test_vscode_mounts_only_selected_workspace_aliases(self):
+        (self.alpha / "package.json").write_text("{}")
+        (self.alpha / ".obsidian").mkdir()
+        self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
+        self.store.resolve_selection(["alpha"])
+        configure_obsidian(self.store, "alpha")
+        self.store.ensure_vscode_config()
+        self.store.save_vscode_enabled(True)
+        self.store.generate_override()
+
+        document = json.loads(self.store.override_file.read_text())
+        volumes = document["services"]["vscode"]["volumes"]
+        targets = [volume["target"] for volume in volumes]
+        serialized = json.dumps(volumes)
+        self.assertEqual(
+            targets,
+            [
+                "/state",
+                "/run/secrets/code-server-config.json",
+                "/workspace/alpha",
+                "/workspace/alpha/node_modules",
+                "/workspace/alpha/.obsidian",
+            ],
+        )
+        self.assertNotIn(str(self.beta.resolve()), serialized)
+        self.assertNotIn(f'"target": "{self.alpha.resolve()}"', serialized)
+        self.assertNotIn("/opt/data", serialized)
+        self.assertTrue(volumes[1]["read_only"])
+        self.assertTrue(volumes[3]["read_only"])
+        self.assertTrue(volumes[4]["read_only"])
+        self.assertNotIn(
+            str(self.store.vscode_config_file.resolve()),
+            json.dumps(volumes[0]),
+        )
+
+    def test_disabled_vscode_has_no_service_or_tailscale_listener(self):
+        self.store.save_vscode_enabled(False)
+        self.store.generate_override()
+        document = json.loads(self.store.override_file.read_text())
+        self.assertNotIn("vscode", document["services"])
+        serve = json.loads(self.store.tailscale_serve_file.read_text())
+        self.assertNotIn(str(VSCODE_PORT), serve["TCP"])
+
+    def test_vscode_route_change_is_deferred_until_refresh(self):
+        self.store.generate_override()
+        self.store.ensure_vscode_config()
+        self.store.save_vscode_enabled(True)
+        self.store.generate_override()
+        serve = json.loads(self.store.tailscale_serve_file.read_text())
+        self.assertNotIn(str(VSCODE_PORT), serve["TCP"])
+        self.store.generate_override(refresh_tailscale=True)
+        serve = json.loads(self.store.tailscale_serve_file.read_text())
+        self.assertIn(str(VSCODE_PORT), serve["TCP"])
 
     def test_unselected_locations_are_absent_from_runtime_files(self):
         self.store.resolve_selection([f"alpha={self.alpha}", f"beta={self.beta}"])
@@ -428,6 +562,8 @@ class CompletionTests(unittest.TestCase):
                 self.assertIn("--location-names", script)
                 self.assertIn("reset-node-modules", script)
                 self.assertIn("obsidian", script)
+                self.assertIn("vscode", script)
+                self.assertTrue("--add" in script or "-l add" in script)
 
     def test_completion_output_does_not_initialize_state(self):
         empty_home = self.root / "empty-home"
@@ -438,6 +574,21 @@ class CompletionTests(unittest.TestCase):
                 self.assertEqual(run(["completions", "fish"]), 0)
         self.assertIn("complete -c hermes-stack", output.getvalue())
         self.assertFalse((empty_home / ".config").exists())
+
+    def test_parser_accepts_additive_start_and_vscode_commands(self):
+        parser = build_parser("hermes-stack")
+        start = parser.parse_args(["start", "--add", "alpha"])
+        self.assertTrue(start.add)
+        self.assertEqual(start.projects, ["alpha"])
+        vscode = parser.parse_args(["vscode", "reset-password"])
+        self.assertEqual(vscode.vscode_command, "reset-password")
+
+    def test_additive_start_requires_a_location(self):
+        empty_home = self.root / "add-home"
+        empty_home.mkdir()
+        with patch("hermes_stack_cli.Path.home", return_value=empty_home):
+            with self.assertRaisesRegex(CliError, "requires at least one project"):
+                run(["start", "--add"])
 
 
 class WorkspacePolicyTests(unittest.TestCase):

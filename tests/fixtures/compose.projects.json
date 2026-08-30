@@ -22,8 +22,20 @@
       "environment": {
         "HERMES_EPHEMERAL_SYSTEM_PROMPT": "Use portable workspace mappings.",
         "HERMES_STACK_WORKSPACE_MANIFEST": "/run/hermes-stack/workspaces.json",
-        "HERMES_WRITE_SAFE_ROOT": "/workspace:/opt/data:${PWD}"
+        "HERMES_WRITE_SAFE_ROOT": "/workspace:/opt/data:${PWD}",
+        "HERMES_STACK_DEV_SERVER_HOST": "0.0.0.0",
+        "HERMES_STACK_DEV_SERVER_PORT": "3000"
       }
+    },
+    "tailscale": {
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "${PWD}/tests/fixtures/runtime/tailscale",
+          "target": "/run/hermes-stack/tailscale",
+          "read_only": true
+        }
+      ]
     }
   }
 }

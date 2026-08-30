@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,9 @@ from typing import Iterable, List, Mapping, Optional, Sequence
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 BASE_STACK_SERVICES = ("hermes", "tailscale", "tailscale-proxy")
 OBSIDIAN_SERVICE = "obsidian-sync"
+VSCODE_SERVICE = "vscode"
+DEV_SERVER_PORT = 3000
+VSCODE_PORT = 8443
 COMPLETION_SHELLS = ("fish", "bash", "zsh")
 COMPLETION_FILES = {
     "fish": "hermes-stack.fish",
@@ -30,6 +34,7 @@ STATE_DIRECTORY_NAME = "hermes-stack"
 LEGACY_STATE_DIRECTORY_NAME = "hermes-docker"
 WORKSPACE_MANIFEST_CONTAINER_PATH = "/run/hermes-stack/workspaces.json"
 WORKSPACE_RUNTIME_CONTAINER_DIRECTORY = "/run/hermes-stack"
+TAILSCALE_RUNTIME_CONTAINER_DIRECTORY = "/run/hermes-stack/tailscale"
 NODE_MODES = ("auto", "on", "off")
 OBSIDIAN_CONFIG_CATEGORIES = (
     "app,appearance,appearance-data,hotkey,core-plugin,core-plugin-data,"
@@ -85,6 +90,10 @@ WORKSPACE_SYSTEM_PROMPT = """Hermes Stack workspace contract:
   change plugins or synchronized Obsidian configuration.
 - Prefer project-relative paths in code and automation. When an absolute path must persist
   outside this container, use the mapping's host_path; it also exists inside the container.
+- Use the single remote development-preview endpoint for demos. Start preview servers on
+  0.0.0.0:3000 (HERMES_STACK_DEV_SERVER_HOST and HERMES_STACK_DEV_SERVER_PORT), configure
+  framework host/origin checks for the tailnet hostname when necessary, and do not claim
+  the preview is available until the server is actually listening.
 - Use the workspace-paths skill when creating scripts, scheduled jobs, configuration, or
   cross-workspace automation that records filesystem paths."""
 
@@ -137,8 +146,13 @@ class StateStore:
         self.workspace_manifest_file = state_dir / "workspaces.json"
         self.obsidian_file = state_dir / "obsidian.json"
         self.obsidian_state_directory = state_dir / "obsidian-headless"
+        self.vscode_file = state_dir / "vscode.json"
+        self.vscode_state_directory = state_dir / "code-server"
+        self.vscode_config_file = state_dir / "code-server-config.json"
         self.runtime_directory = state_dir / "runtime"
         self.runtime_manifest_file = self.runtime_directory / "workspaces.json"
+        self.tailscale_runtime_directory = self.runtime_directory / "tailscale"
+        self.tailscale_serve_file = self.tailscale_runtime_directory / "serve.json"
 
     def ensure_directories(self) -> None:
         self.state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -270,6 +284,54 @@ class StateStore:
         except FileNotFoundError:
             pass
 
+    def vscode_enabled(self) -> bool:
+        if not self.vscode_file.exists():
+            return False
+        document = self._read_json(self.vscode_file)
+        if (
+            not isinstance(document, dict)
+            or document.get("version") != 1
+            or not isinstance(document.get("enabled"), bool)
+        ):
+            raise CliError(f"Invalid VS Code configuration: {self.vscode_file}")
+        return document["enabled"]
+
+    def save_vscode_enabled(self, enabled: bool) -> None:
+        self._atomic_json(self.vscode_file, {"version": 1, "enabled": enabled})
+        self.vscode_file.chmod(0o600)
+
+    def ensure_vscode_config(self, reset: bool = False) -> str:
+        self.vscode_state_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.vscode_state_directory.chmod(0o700)
+        if self.vscode_config_file.exists() and not reset:
+            document = self._read_json(self.vscode_config_file)
+            password = document.get("password") if isinstance(document, dict) else None
+            if (
+                not isinstance(password, str)
+                or not password
+                or document.get("bind-addr") != "0.0.0.0:8080"
+                or document.get("auth") != "password"
+            ):
+                raise CliError(
+                    f"Invalid code-server configuration: {self.vscode_config_file}"
+                )
+            self.vscode_config_file.chmod(0o600)
+            return password
+
+        password = secrets.token_urlsafe(24)
+        self._atomic_json(
+            self.vscode_config_file,
+            {
+                "bind-addr": "0.0.0.0:8080",
+                "auth": "password",
+                "password": password,
+                "cert": False,
+                "disable-telemetry": True,
+            },
+        )
+        self.vscode_config_file.chmod(0o600)
+        return password
+
     def load_selection(self) -> List[str]:
         if not self.selection_file.exists():
             return []
@@ -291,9 +353,11 @@ class StateStore:
             {"version": 1, "projects": list(selection)},
         )
 
-    def resolve_selection(self, entries: Sequence[str]) -> List[str]:
+    def resolve_selection(
+        self, entries: Sequence[str], add: bool = False
+    ) -> List[str]:
         locations = self.load_locations()
-        selection: List[str] = []
+        selection: List[str] = self.load_selection() if add else []
 
         for entry in entries:
             if "=" in entry:
@@ -311,6 +375,12 @@ class StateStore:
                 inherited = locations.get(displaced[0]) if displaced else locations.get(name)
                 for saved_name in displaced:
                     del locations[saved_name]
+                if displaced:
+                    selection = [
+                        name if selected_name in displaced else selected_name
+                        for selected_name in selection
+                    ]
+                    selection = list(dict.fromkeys(selection))
                 locations[name] = Location(
                     project_path,
                     inherited.node if inherited is not None else "auto",
@@ -327,6 +397,8 @@ class StateStore:
                         f"'{Path(sys.argv[0]).name} start {name}=/path'."
                     )
 
+            if name in selection and add:
+                continue
             if name in selection:
                 raise CliError(f"Duplicate project name: {name}")
             selection.append(name)
@@ -364,7 +436,7 @@ class StateStore:
             )
         return workspaces
 
-    def generate_override(self) -> None:
+    def generate_override(self, refresh_tailscale: bool = False) -> None:
         workspaces = self.selected_workspaces()
         manifest = {
             "version": 1,
@@ -377,11 +449,18 @@ class StateStore:
         self.runtime_directory.mkdir(mode=0o755, parents=True, exist_ok=True)
         self.runtime_directory.chmod(0o755)
         self._atomic_json(self.runtime_manifest_file, manifest)
+        if refresh_tailscale or not self.tailscale_serve_file.exists():
+            self._atomic_json(
+                self.tailscale_serve_file,
+                tailscale_serve_document(self.vscode_enabled()),
+            )
+        self.tailscale_runtime_directory.chmod(0o755)
         # The parent state directory remains private (0700). These filtered
         # copies must be readable by unprivileged container processes; only the
         # dedicated runtime directory is bind-mounted into the container.
         self.workspace_manifest_file.chmod(0o644)
         self.runtime_manifest_file.chmod(0o644)
+        self.tailscale_serve_file.chmod(0o644)
 
         volumes = []
         named_volumes = {}
@@ -437,8 +516,22 @@ class StateStore:
                         WORKSPACE_MANIFEST_CONTAINER_PATH
                     ),
                     "HERMES_WRITE_SAFE_ROOT": ":".join(safe_roots),
+                    "HERMES_STACK_DEV_SERVER_HOST": "0.0.0.0",
+                    "HERMES_STACK_DEV_SERVER_PORT": str(DEV_SERVER_PORT),
                 },
-            }
+            },
+            "tailscale": {
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": str(
+                            self.tailscale_runtime_directory.resolve(strict=True)
+                        ),
+                        "target": TAILSCALE_RUNTIME_CONTAINER_DIRECTORY,
+                        "read_only": True,
+                    }
+                ]
+            },
         }
         obsidian_location = self.load_obsidian_location()
         if obsidian_location is not None:
@@ -464,6 +557,53 @@ class StateStore:
                         "target": "/state/obsidian-headless",
                     },
                 ],
+            }
+        if self.vscode_enabled():
+            self.ensure_vscode_config()
+            vscode_volumes = [
+                {
+                    "type": "bind",
+                    "source": str(self.vscode_state_directory.resolve(strict=True)),
+                    "target": "/state",
+                },
+                {
+                    "type": "bind",
+                    "source": str(self.vscode_config_file.resolve(strict=True)),
+                    "target": "/run/secrets/code-server-config.json",
+                    "read_only": True,
+                },
+            ]
+            for workspace in workspaces:
+                vscode_volumes.append(
+                    {
+                        "type": "bind",
+                        "source": workspace.host_path,
+                        "target": workspace.workspace_path,
+                    }
+                )
+                if workspace.node_project:
+                    volume_key, _ = node_modules_volume(workspace.host_path)
+                    vscode_volumes.append(
+                        {
+                            "type": "volume",
+                            "source": volume_key,
+                            "target": f"{workspace.workspace_path}/node_modules",
+                            "read_only": True,
+                            "volume": {"nocopy": True},
+                        }
+                    )
+                if workspace.obsidian_vault:
+                    vscode_volumes.append(
+                        {
+                            "type": "bind",
+                            "source": str(Path(workspace.host_path) / ".obsidian"),
+                            "target": f"{workspace.workspace_path}/.obsidian",
+                            "read_only": True,
+                        }
+                    )
+            services[VSCODE_SERVICE] = {
+                "user": f"{os.getuid()}:{os.getgid()}",
+                "volumes": vscode_volumes,
             }
         override = {"services": services}
         if named_volumes:
@@ -552,6 +692,28 @@ def node_modules_volume(host_path: str) -> tuple[str, str]:
     )
 
 
+def tailscale_serve_document(vscode_enabled: bool) -> Mapping[str, object]:
+    ports = {
+        "9119": "http://127.0.0.1:9119",
+        "443": "http://127.0.0.1:7456",
+        str(DEV_SERVER_PORT): f"http://127.0.0.1:{DEV_SERVER_PORT}",
+    }
+    if vscode_enabled:
+        ports[str(VSCODE_PORT)] = f"http://127.0.0.1:{VSCODE_PORT}"
+    return {
+        "TCP": {port: {"HTTPS": True} for port in ports},
+        "Web": {
+            f"${{TS_CERT_DOMAIN}}:{port}": {
+                "Handlers": {"/": {"Proxy": proxy}}
+            }
+            for port, proxy in ports.items()
+        },
+        "AllowFunnel": {
+            f"${{TS_CERT_DOMAIN}}:{port}": False for port in ports
+        },
+    }
+
+
 def resolve_state_directory(home: Path, allow_legacy: bool = False) -> Path:
     config_dir = home / ".config"
     state_dir = config_dir / STATE_DIRECTORY_NAME
@@ -637,6 +799,8 @@ class HermesStack:
             str(self.compose_file),
             "-f",
             str(self.store.override_file),
+            "--profile",
+            "vscode",
         ]
         if self.env_file.is_file():
             command.extend(("--env-file", str(self.env_file)))
@@ -717,6 +881,9 @@ class HermesStack:
     def show_urls(self) -> bool:
         print("Hermes:      http://127.0.0.1:9119")
         print("Open Design: http://127.0.0.1:7456")
+        print(f"Dev Preview: http://127.0.0.1:{DEV_SERVER_PORT}")
+        if self.store.vscode_enabled():
+            print(f"VS Code:     http://127.0.0.1:{VSCODE_PORT}")
         fqdn = self.tailscale_fqdn()
         if not fqdn:
             print("Remote URLs unavailable: Tailscale is not authenticated.")
@@ -724,6 +891,9 @@ class HermesStack:
             return False
         print(f"Hermes:      https://{fqdn}:9119")
         print(f"Open Design: https://{fqdn}")
+        print(f"Dev Preview: https://{fqdn}:{DEV_SERVER_PORT}")
+        if self.store.vscode_enabled():
+            print(f"VS Code:     https://{fqdn}:{VSCODE_PORT}")
         print(f"Hermes OAuth callback: https://{fqdn}:9119/auth/callback")
         return True
 
@@ -745,16 +915,19 @@ class HermesStack:
             quiet=True,
         )
 
-    def prepare(self) -> None:
-        self.store.generate_override()
+    def prepare(self, refresh_tailscale: bool = False) -> None:
+        self.store.generate_override(refresh_tailscale=refresh_tailscale)
 
     def start_services(self) -> tuple[str, ...]:
+        services = list(BASE_STACK_SERVICES)
         if self.store.load_obsidian_location() is not None:
-            return (*BASE_STACK_SERVICES, OBSIDIAN_SERVICE)
-        return BASE_STACK_SERVICES
+            services.append(OBSIDIAN_SERVICE)
+        if self.store.vscode_enabled():
+            services.append(VSCODE_SERVICE)
+        return tuple(services)
 
     def start(self) -> None:
-        self.prepare()
+        self.prepare(refresh_tailscale=True)
         self.compose("up", "-d", "tailscale")
         self.wait_for_remote_origin()
         self.compose(
@@ -769,7 +942,7 @@ class HermesStack:
         self.show_urls()
 
     def tailscale_login(self) -> None:
-        self.prepare()
+        self.prepare(refresh_tailscale=True)
         self.compose("up", "-d", "tailscale")
         self.compose("exec", "tailscale", "tailscale", "up")
         if not self.wait_for_remote_origin():
@@ -842,6 +1015,10 @@ def build_parser(command_name: str) -> argparse.ArgumentParser:
 
     start = subparsers.add_parser("start", help="start the stack with saved project locations")
     start.add_argument(
+        "--add", action="store_true",
+        help="retain the current selection and add the named locations",
+    )
+    start.add_argument(
         "projects", nargs="*", metavar="NAME[=PATH]",
         help="saved name, or name=/path to register or update a location",
     )
@@ -851,7 +1028,8 @@ def build_parser(command_name: str) -> argparse.ArgumentParser:
 
     logs = subparsers.add_parser("logs", help="follow service logs")
     logs.add_argument(
-        "target", choices=("hermes", "open-design", "obsidian", "tailscale", "all")
+        "target",
+        choices=("hermes", "open-design", "obsidian", "vscode", "tailscale", "all"),
     )
 
     subparsers.add_parser("projects", help="show the current project selection")
@@ -894,6 +1072,20 @@ def build_parser(command_name: str) -> argparse.ArgumentParser:
     obsidian_setup.add_argument("--device-name", default="hermes-stack")
     obsidian_subparsers.add_parser("status", help="show headless sync status")
     obsidian_subparsers.add_parser("disable", help="disable automatic headless sync")
+
+    vscode = subparsers.add_parser(
+        "vscode", help="configure the optional tailnet VS Code service"
+    )
+    vscode_subparsers = vscode.add_subparsers(
+        dest="vscode_command", metavar="ACTION", required=True
+    )
+    vscode_subparsers.add_parser("enable", help="enable VS Code on the next stack start")
+    vscode_subparsers.add_parser("disable", help="disable VS Code on the next stack start")
+    vscode_subparsers.add_parser("status", help="show configured and running status")
+    vscode_subparsers.add_parser("password", help="show the current VS Code password")
+    vscode_subparsers.add_parser(
+        "reset-password", help="rotate the VS Code password for the next stack start"
+    )
 
     completions = subparsers.add_parser(
         "completions", help="print shell completion definitions"
@@ -1054,16 +1246,18 @@ def run(arguments: Optional[Sequence[str]] = None) -> int:
     stack = HermesStack(stack_dir, store, command_name)
 
     if args.command == "start":
+        if args.add and not args.projects:
+            raise CliError("'start --add' requires at least one project name or NAME=/path.")
         if args.projects:
-            store.resolve_selection(args.projects)
+            store.resolve_selection(args.projects, add=args.add)
         stack.start()
     elif args.command == "stop":
         stack.prepare()
-        stack.compose("stop", *BASE_STACK_SERVICES, OBSIDIAN_SERVICE)
+        stack.compose("stop", *BASE_STACK_SERVICES, OBSIDIAN_SERVICE, VSCODE_SERVICE)
         print("Hermes stack stopped.")
     elif args.command == "restart":
         stack.prepare()
-        stack.compose("stop", *BASE_STACK_SERVICES, OBSIDIAN_SERVICE)
+        stack.compose("stop", *BASE_STACK_SERVICES, OBSIDIAN_SERVICE, VSCODE_SERVICE)
         stack.start()
     elif args.command == "status":
         stack.prepare()
@@ -1077,6 +1271,8 @@ def run(arguments: Optional[Sequence[str]] = None) -> int:
             stack.compose("logs", "-f", "tailscale", "tailscale-proxy")
         elif args.target == "obsidian":
             stack.compose("logs", "-f", OBSIDIAN_SERVICE)
+        elif args.target == "vscode":
+            stack.compose("logs", "-f", VSCODE_SERVICE)
         elif args.target == "all":
             stack.compose("logs", "-f", *stack.start_services())
         else:
@@ -1131,12 +1327,46 @@ def run(arguments: Optional[Sequence[str]] = None) -> int:
         elif args.obsidian_command == "disable":
             store.disable_obsidian()
             print("Obsidian Headless disabled. The running stack is unchanged.")
+    elif args.command == "vscode":
+        if args.vscode_command == "enable":
+            store.ensure_vscode_config()
+            store.save_vscode_enabled(True)
+            print("VS Code enabled. Restart the stack when ready to apply it.")
+            print(f"View the password with '{command_name} vscode password'.")
+        elif args.vscode_command == "disable":
+            store.save_vscode_enabled(False)
+            print("VS Code disabled. The running stack is unchanged until restart.")
+        elif args.vscode_command == "status":
+            stack.prepare()
+            running = stack.compose(
+                "ps", "-q", "--status", "running", VSCODE_SERVICE,
+                capture=True,
+                check=False,
+            )
+            print(f"Configured: {'enabled' if store.vscode_enabled() else 'disabled'}")
+            print(
+                "Running:    "
+                f"{'yes' if running.returncode == 0 and running.stdout.strip() else 'no'}"
+            )
+        elif args.vscode_command == "password":
+            if not store.vscode_config_file.exists():
+                raise CliError("VS Code has not been enabled yet.")
+            print(store.ensure_vscode_config())
+        elif args.vscode_command == "reset-password":
+            if not store.vscode_config_file.exists():
+                raise CliError("VS Code has not been enabled yet.")
+            password = store.ensure_vscode_config(reset=True)
+            print(password)
+            print("VS Code password rotated. Restart the stack to apply it.")
     elif args.command == "shell":
         stack.prepare()
         stack.compose("exec", "--user", "hermes", "hermes", "/usr/bin/fish", "--login")
     elif args.command == "update":
         stack.prepare()
-        stack.compose("pull", "tailscale", "tailscale-proxy")
+        pull_services = ["tailscale", "tailscale-proxy"]
+        if store.vscode_enabled():
+            pull_services.append(VSCODE_SERVICE)
+        stack.compose("pull", *pull_services)
         stack.compose("build", "--pull", "hermes", OBSIDIAN_SERVICE)
         stack.start()
         print("Hermes stack updated.")

@@ -8,6 +8,8 @@ separate model credential.
 Hermes and Open Design run as supervised processes in one application
 container. This gives OD direct access to Hermes' authenticated CLI and the
 same project filesystem while keeping their web interfaces on separate ports.
+An optional isolated code-server sidecar provides browser-based editing without
+receiving Hermes credentials.
 
 ## Install the launcher
 
@@ -19,7 +21,8 @@ to the Docker VM. For concurrent Hermes profiles, Kanban workers, browser
 automation, and persistent project dependencies, 6 CPUs, 12 GiB of memory, and
 100 GiB of disk are recommended. These are VM-wide resources; the current
 Hermes service may use up to 4 CPUs and 8 GiB, while Docker and the sidecars
-need the remaining headroom.
+need the remaining headroom. When enabled, code-server is capped at 2 CPUs and
+2 GiB of memory.
 
 For an existing Colima VM, stop it and restart it with the larger allocation:
 
@@ -127,6 +130,17 @@ An explicit `name=/path` adds or updates a registration. If that host path was
 previously registered under a different name, the new name replaces the old
 one. With no project arguments, `start`, `restart`, and `update` reuse the last
 selection.
+
+To retain that selection while activating more saved or newly registered
+locations, use `--add`. This works whether the stack is running or stopped,
+preserves the existing order, and ignores already-active names:
+
+```console
+hermes-stack start --add blog
+hermes-stack start --add demo=/absolute/path/to/demo
+```
+
+Without `--add`, explicit project arguments continue to replace the selection.
 
 Inspect or edit the registry with:
 
@@ -273,18 +287,21 @@ hermes-stack tailscale-login
 hermes-stack tailscale-urls
 ```
 
-Tailscale Serve exposes Open Design on standard HTTPS port `443` and Hermes on
-HTTPS port `9119`, only to the tailnet; Funnel is disabled. Its node identity
-is stored at
+Tailscale Serve exposes Open Design on standard HTTPS port `443`, Hermes on
+HTTPS port `9119`, and the development preview on HTTPS port `3000`, only to
+the tailnet; Funnel is disabled. When browser VS Code is enabled, it is also
+available on HTTPS port `8443`. The node identity is stored at
 `~/.config/hermes-stack/tailscale-state`, outside Docker's managed volume
-storage. Local access remains available at
-`http://127.0.0.1:9119` and `http://127.0.0.1:7456`.
+storage. Local access remains available on the corresponding `127.0.0.1`
+ports.
 
 The resulting remote URLs are:
 
 ```text
 https://<tailscale-fqdn>
 https://<tailscale-fqdn>:9119
+https://<tailscale-fqdn>:3000
+https://<tailscale-fqdn>:8443  # when VS Code is enabled
 ```
 
 Open Design disables its API-token middleware because Tailscale and Caddy are
@@ -292,6 +309,47 @@ the trusted authentication boundary for remote browser access. Its published
 host port remains loopback-only, and the exact remote origin is allow-listed
 after Tailscale login. This lets the remote UI save OD settings without exposing
 OD directly on the LAN.
+
+### Development preview
+
+Port `3000` is the stack's single preview slot. Ask Hermes to start the selected
+project's development server on `0.0.0.0:3000`; the container also provides
+`HERMES_STACK_DEV_SERVER_HOST` and `HERMES_STACK_DEV_SERVER_PORT`. Frameworks
+with allowed-host or allowed-origin checks may also need the tailnet hostname.
+Caddy forwards HTTP and WebSocket traffic for hot reload, but the preview URL
+returns an upstream error when no server is listening.
+
+The preview has no stack-provided application login. Tailnet membership and
+Tailscale grants are its authentication boundary, so use it only for trusted
+development demos and never enable Funnel.
+
+### Browser VS Code
+
+Enable the isolated code-server sidecar and apply it with a user-initiated
+restart:
+
+```console
+hermes-stack vscode enable
+hermes-stack vscode password
+hermes-stack restart
+hermes-stack tailscale-urls
+```
+
+The first enable generates a strong persistent password. The password and
+editor state live beneath `~/.config/hermes-stack`, outside this repository;
+the password configuration is mode `0600` and mounted read-only. Use
+`vscode status`, `logs vscode`, or `vscode reset-password` to inspect or rotate
+it. Password rotation and `vscode disable` take effect on the next restart and
+do not delete editor state.
+
+code-server receives only currently selected `/workspace/<name>` mounts. It
+does not receive portable host-path mounts, `/opt/data`, Hermes profiles,
+GitHub tokens, the workspace manifest, or Obsidian credentials. Node projects'
+Linux `node_modules` and Obsidian `.obsidian` configuration are overlaid
+read-only, so dependency installation and plugin/configuration changes remain
+outside the editor sidecar. Browser extensions and terminals can still read
+and modify selected project files, so treat VS Code access as shell access to
+those projects.
 
 ## Authentication
 
@@ -315,28 +373,31 @@ origin allowed and refreshes the Tailscale proxy's application upstream.
 
 The stack assumes a single-user host and a trusted tailnet:
 
-- Hermes and Open Design publish host ports only on `127.0.0.1`. They are not
-  directly reachable from the LAN or public internet.
+- Hermes, Open Design, the development preview, and code-server publish host
+  ports only on `127.0.0.1`. They are not directly reachable from the LAN or
+  public internet.
 - Tailscale Serve is the remote access boundary. Funnel is explicitly disabled;
   tailnet membership and Tailscale grants determine who can connect.
 - Open Design's bearer-token middleware is deliberately disabled because its
   browser and API traffic passes through the trusted Tailscale/Caddy boundary.
   Any process running as the local user can still reach OD through its loopback
   port, so this is not isolation from other local processes or users.
-- Hermes authentication under `~/.hermes`, OD state, Tailscale node state, and
-  Obsidian Headless credentials, and the project-location registry are
-  sensitive runtime data stored outside this repository. Obsidian credentials
-  are available only to its sidecar. Do not copy this state into the repository
-  or publish a snapshot made from a running container with `docker commit`.
+- Hermes authentication under `~/.hermes`, OD state, Tailscale node state,
+  Obsidian Headless credentials, code-server password/state, and the
+  project-location registry are sensitive runtime data stored outside this
+  repository. Obsidian credentials are available only to its sidecar, while
+  code-server receives neither Obsidian nor Hermes credentials. Do not copy
+  this state into the repository or publish a snapshot made from a running
+  container with `docker commit`.
 - Selected host projects are mounted read-write at both their `/workspace`
   alias and original absolute path. These are two names for the same files and
   do not expose either path's parent or sibling directories. Hermes sessions
   started from Discord and OD are independent writers, so do not run both
   against the same project concurrently.
 
-Use narrow Tailscale grants for ports `443` and `9119`, periodically review
-tailnet membership, and treat anyone with access to either UI as able to invoke
-the authenticated Hermes runtime.
+Use narrow Tailscale grants for ports `443`, `9119`, `3000`, and optional
+`8443`, periodically review tailnet membership, and treat anyone with access to
+Hermes or Open Design as able to invoke the authenticated Hermes runtime.
 
 ## Reproducible dependencies
 
@@ -344,7 +405,8 @@ External container and build images use readable release tags plus immutable
 multi-platform SHA-256 digests. The Open Design source revision and CLI tool
 versions are pinned separately in `compose.yaml` and the Dockerfiles. The
 locally built Obsidian sidecar pins the official `obsidian-headless` npm package
-and is not published as a redistributed image.
+and is not published as a redistributed image. The optional browser editor uses
+the official multi-platform code-server image pinned by release tag and digest.
 
 `hermes-stack update` rebuilds and restarts the reviewed versions in this
 repository; it does not silently advance pinned dependencies. On GitHub,
