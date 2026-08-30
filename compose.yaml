@@ -16,6 +16,7 @@ services:
     ports:
       - "127.0.0.1:9119:9119"
       - "127.0.0.1:7456:7456"
+      - "127.0.0.1:3000:3000"
     volumes:
       - ~/.hermes:/opt/data
       - ${HOME}/.config/hermes-stack/open-design:/opt/open-design-data
@@ -25,6 +26,8 @@ services:
       HERMES_DASHBOARD_FILES_ROOT: "/workspace"
       HERMES_WRITE_SAFE_ROOT: "/workspace:/opt/data"
       TERMINAL_CWD: "/workspace"
+      HERMES_STACK_DEV_SERVER_HOST: "0.0.0.0"
+      HERMES_STACK_DEV_SERVER_PORT: "3000"
       OD_BIND_HOST: "0.0.0.0"
       OD_PORT: "7456"
       OD_WEB_PORT: "7456"
@@ -65,6 +68,39 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  vscode:
+    image: codercom/code-server:4.135.0@sha256:ccd326184d71efc5ebb94155eda7bb30153902342a35dbc8525450d81aa55012
+    profiles: ["vscode"]
+    restart: unless-stopped
+    entrypoint: ["/usr/bin/dumb-init", "--", "/usr/bin/code-server"]
+    command:
+      - "--config"
+      - "/run/secrets/code-server-config.json"
+      - "--user-data-dir"
+      - "/state/user-data"
+      - "--extensions-dir"
+      - "/state/extensions"
+      - "/workspace"
+    environment:
+      HOME: "/state"
+    working_dir: /workspace
+    ports:
+      - "127.0.0.1:8443:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /workspace
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2g
+    cpus: 2
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   tailscale:
     image: tailscale/tailscale:v1.102.2@sha256:321ce041508c19079b57a28b6666c8d81ab0b08accc0a2585b3ab663d557ac24
     container_name: hermes-stack-tailscale
@@ -76,7 +112,7 @@ services:
       TS_KUBE_SECRET: ""
       TS_USERSPACE: "true"
       TS_AUTH_ONCE: "true"
-      TS_SERVE_CONFIG: /config/serve.json
+      TS_SERVE_CONFIG: /run/hermes-stack/tailscale/serve.json
     volumes:
       - ${HOME}/.config/hermes-stack/tailscale-state:/var/lib/tailscale
       - ./tailscale:/config:ro

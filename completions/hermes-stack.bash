@@ -9,16 +9,16 @@ _hermes_stack() {
     command="${COMP_WORDS[1]-}"
 
     if (( COMP_CWORD == 1 )); then
-        COMPREPLY=( $(compgen -W 'start stop restart status logs projects locations obsidian completions shell update tailscale-login tailscale-status tailscale-urls' -- "$cur") )
+        COMPREPLY=( $(compgen -W 'start stop restart status logs projects locations obsidian vscode completions shell update tailscale-login tailscale-status tailscale-urls' -- "$cur") )
         return
     fi
 
     case "$command" in
         start)
-            COMPREPLY=( $(compgen -W "$(_hermes_stack_location_names)" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--add $(_hermes_stack_location_names)" -- "$cur") )
             ;;
         logs)
-            COMPREPLY=( $(compgen -W 'hermes open-design obsidian tailscale all' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'hermes open-design obsidian vscode tailscale all' -- "$cur") )
             ;;
         completions)
             COMPREPLY=( $(compgen -W 'fish bash zsh' -- "$cur") )
@@ -67,6 +67,9 @@ _hermes_stack() {
                     COMPREPLY=( $(compgen -W '--vault --device-name' -- "$cur") )
                     ;;
             esac
+            ;;
+        vscode)
+            COMPREPLY=( $(compgen -W 'enable disable status password reset-password' -- "$cur") )
             ;;
     esac
 }

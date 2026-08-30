@@ -10,6 +10,10 @@ function __hermes_stack_needs_obsidian_action
     not __fish_seen_subcommand_from configure login setup status disable
 end
 
+function __hermes_stack_needs_vscode_action
+    not __fish_seen_subcommand_from enable disable status password reset-password
+end
+
 complete -c hermes-stack -f
 
 complete -c hermes-stack -n '__fish_use_subcommand' -a start -d 'Start with saved project locations'
@@ -20,6 +24,7 @@ complete -c hermes-stack -n '__fish_use_subcommand' -a logs -d 'Follow service l
 complete -c hermes-stack -n '__fish_use_subcommand' -a projects -d 'Show the current project selection'
 complete -c hermes-stack -n '__fish_use_subcommand' -a locations -d 'List or edit saved locations'
 complete -c hermes-stack -n '__fish_use_subcommand' -a obsidian -d 'Configure the Obsidian mirror'
+complete -c hermes-stack -n '__fish_use_subcommand' -a vscode -d 'Configure tailnet VS Code'
 complete -c hermes-stack -n '__fish_use_subcommand' -a completions -d 'Print shell completion definitions'
 complete -c hermes-stack -n '__fish_use_subcommand' -a shell -d 'Open the Hermes container shell'
 complete -c hermes-stack -n '__fish_use_subcommand' -a update -d 'Pull, rebuild, and restart'
@@ -28,7 +33,8 @@ complete -c hermes-stack -n '__fish_use_subcommand' -a tailscale-status -d 'Show
 complete -c hermes-stack -n '__fish_use_subcommand' -a tailscale-urls -d 'Show local and tailnet URLs'
 
 complete -c hermes-stack -n '__fish_seen_subcommand_from start' -a '(__hermes_stack_location_names)' -d 'Saved location'
-complete -c hermes-stack -n '__fish_seen_subcommand_from logs' -a 'hermes open-design obsidian tailscale all'
+complete -c hermes-stack -n '__fish_seen_subcommand_from start' -l add -d 'Retain current projects and add locations'
+complete -c hermes-stack -n '__fish_seen_subcommand_from logs' -a 'hermes open-design obsidian vscode tailscale all'
 complete -c hermes-stack -n '__fish_seen_subcommand_from completions' -a 'fish bash zsh'
 
 complete -c hermes-stack -n '__fish_seen_subcommand_from locations; and __hermes_stack_needs_location_action' -a list -d 'List saved locations'
@@ -48,3 +54,9 @@ complete -c hermes-stack -n '__fish_seen_subcommand_from obsidian; and __hermes_
 complete -c hermes-stack -n '__fish_seen_subcommand_from obsidian; and __fish_seen_subcommand_from configure' -a '(__hermes_stack_location_names)' -d 'Saved location'
 complete -c hermes-stack -n '__fish_seen_subcommand_from obsidian; and __fish_seen_subcommand_from setup' -l vault -r -d 'Remote vault name or ID'
 complete -c hermes-stack -n '__fish_seen_subcommand_from obsidian; and __fish_seen_subcommand_from setup' -l device-name -r -d 'Sync device name'
+
+complete -c hermes-stack -n '__fish_seen_subcommand_from vscode; and __hermes_stack_needs_vscode_action' -a enable -d 'Enable VS Code on next start'
+complete -c hermes-stack -n '__fish_seen_subcommand_from vscode; and __hermes_stack_needs_vscode_action' -a disable -d 'Disable VS Code on next start'
+complete -c hermes-stack -n '__fish_seen_subcommand_from vscode; and __hermes_stack_needs_vscode_action' -a status -d 'Show configured and running status'
+complete -c hermes-stack -n '__fish_seen_subcommand_from vscode; and __hermes_stack_needs_vscode_action' -a password -d 'Show the current password'
+complete -c hermes-stack -n '__fish_seen_subcommand_from vscode; and __hermes_stack_needs_vscode_action' -a reset-password -d 'Rotate the password'

@@ -31,11 +31,13 @@ jobs:
 
       - name: Validate static configuration
         run: |
-          python -m json.tool tailscale/serve.json >/dev/null
+          python -m json.tool tests/fixtures/runtime/tailscale/serve.json >/dev/null
           sh -n tailscale/entrypoint.sh docker/open-design-run docker/open-design-setup
+          bash -n completions/hermes-stack.bash
           docker compose \
             -f compose.yaml \
             -f tests/fixtures/compose.projects.json \
+            --profile vscode \
             config --quiet
 
   secrets:
