@@ -69,7 +69,7 @@ services:
       - no-new-privileges:true
 
   vscode:
-    image: codercom/code-server:4.135.0@sha256:ccd326184d71efc5ebb94155eda7bb30153902342a35dbc8525450d81aa55012
+    image: codercom/code-server:4.140.0-39@sha256:7fffda9be1870df739e8a9793e9157f3303962d8a43f005f858865fe362cf0eb
     profiles: ["vscode"]
     restart: unless-stopped
     entrypoint: ["/usr/bin/dumb-init", "--", "/usr/bin/code-server"]
