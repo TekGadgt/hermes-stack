@@ -1,6 +1,6 @@
 ARG OPEN_DESIGN_REV=0c237048cb078f95ab01c416924dcb255f7d5dfd
 
-FROM node:24.19.0-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS open-design-build
+FROM node:26.11.1-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567 AS open-design-build
 
 ARG OPEN_DESIGN_REV
 
